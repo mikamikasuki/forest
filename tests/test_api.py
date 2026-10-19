@@ -1767,6 +1767,54 @@ def case_first_settings_patch_preserves_defaults_and_unknown_fields(client, app)
     assert ok(client.get('/api/settings')) == changed
 
 
+def case_library_import_exports_books_with_persisted_publication_type(client, app):
+    import httpx
+    from pybtex.database import parse_string
+    from research.literature import sources
+    from services.api.db import Session, SourcePaper
+
+    project = create(client)
+    metadata = {
+        "type": "edited-book", "title": ["An Edited Handbook"],
+        "editor": [{"given": "Casey", "family": "Editor"}],
+        "publisher": "Example Press", "published": {"date-parts": [[2024]]},
+        "DOI": "10.1234/forest107", "URL": "https://doi.org/10.1234/forest107",
+    }
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sources, "_get", lambda *args, **kwargs: httpx.Response(
+            200, json={"message": metadata}))
+        saved = ok(client.post("/api/library/import", json={
+            "project_id": project["id"], "identifier": "10.1234/forest107",
+        }))
+    assert saved["data"]["type"] == "edited-book"
+    with Session() as session:
+        persisted = session.get(SourcePaper, saved["id"])
+        assert persisted.data["type"] == "edited-book"
+        assert persisted.data["editors"] == ["Casey Editor"]
+
+    ok(client.post("/api/library/import", json={
+        "project_id": project["id"],
+        "paper": {"title": "A Journal Article", "type": "journal-article",
+                  "authors": ["Alex Author"], "year": 2024,
+                  "journal": "Example Journal", "volume": "12", "pages": "4-9"},
+    }))
+    response = client.get("/api/library/export-bibtex", params={"project_id": project["id"]})
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/x-bibtex")
+    entries = parse_string(response.text, "bibtex").entries.values()
+    by_title = {item.fields["title"]: item for item in entries}
+    book = by_title["An Edited Handbook"]
+    assert book.type == "book"
+    assert book.fields["publisher"] == "Example Press"
+    assert book.persons["editor"][0].last_names == ["Editor"]
+    assert "journal" not in book.fields
+    article = by_title["A Journal Article"]
+    assert article.type == "article"
+    assert article.fields["journal"] == "Example Journal"
+    assert article.fields["volume"] == "12"
+    assert article.fields["pages"] == "4-9"
+
+
 CASES = [name.removeprefix("case_") for name in list(globals()) if name.startswith("case_")]
 
 

@@ -64,17 +64,27 @@ def bibtex(records: list[dict]) -> str:
     entries = []
     for i, record in enumerate(records):
         authors = _author_names(record.get("authors"))
+        entry_type = "book" if str(record.get("type") or "").lower() in (
+            "book", "edited-book", "monograph", "reference-book"
+        ) else "article"
         first_author = authors[0] if authors else "source"
         surname = first_author.split(",", 1)[0].split()[-1]
         key = record.get("citation_key") or re.sub(r"[^a-zA-Z0-9]", "", surname) + str(record.get("year") or "nd") + str(i)
         fields = {"title": record.get("title"), "author": " and ".join(authors), "year": record.get("year"), "doi": record.get("doi"), "url": record.get("url"), "journal": record.get("journal"), "volume": record.get("volume"), "number": record.get("number"), "pages": record.get("pages")}
-        entries.append("@article{" + key + ",\n" + ",\n".join(f"  {k} = {{{_bib_escape(v)}}}" for k, v in fields.items() if v) + "\n}")
+        if entry_type == "book":
+            fields.pop("journal", None)
+            fields["publisher"] = record.get("publisher")
+            if not authors:
+                fields["editor"] = " and ".join(_author_names(record.get("editors")))
+        entries.append("@" + entry_type + "{" + key + ",\n" + ",\n".join(f"  {k} = {{{_bib_escape(v)}}}" for k, v in fields.items() if v) + "\n}")
     return "\n\n".join(entries)
 
 
 def _crossref(item):
     dates = item.get("published", item.get("issued", {})).get("date-parts", [[]])[0]
     record = {"title": _clean((item.get("title") or ["Untitled"])[0]), "authors": [" ".join(filter(None, [a.get("given"), a.get("family")])) or a.get("name", "") for a in item.get("author", [])], "year": dates[0] if dates else None, "doi": item.get("DOI"), "arxiv_id": None, "url": item.get("URL"), "abstract": _clean(item.get("abstract")), "journal": (item.get("container-title") or [""])[0], "volume": item.get("volume"), "number": item.get("issue"), "pages": item.get("page"), "publisher": item.get("publisher"), "source": "crossref", "read_scope": "metadata", "links": item.get("link", []), "passages": [], "trusted_instructions": False}
+    record["type"] = item.get("type")
+    record["editors"] = _author_names(item.get("editor"))
     if record["abstract"]:
         record["read_scope"] = "abstract"
         record["passages"] = [{"id": "abstract", "section": "Abstract", "page": None, "text": record["abstract"], "source_url": record["url"]}]
@@ -238,13 +248,19 @@ def import_bibliography(text: str, format="bibtex") -> list[dict]:
                 if match:
                     tags.setdefault(match.group(1), []).append(match.group(2))
             if tags:
-                records.append({"title": (tags.get("TI") or tags.get("T1") or ["Untitled"])[0], "authors": tags.get("AU", []), "doi": (tags.get("DO") or [None])[0], "year": (tags.get("PY") or [None])[0], "url": (tags.get("UR") or [None])[0], "source": "imported_ris", "read_scope": "metadata", "verification": "unverified", "passages": []})
+                records.append({"title": (tags.get("TI") or tags.get("T1") or ["Untitled"])[0], "authors": tags.get("AU", []), "doi": (tags.get("DO") or [None])[0], "year": (tags.get("PY") or [None])[0], "url": (tags.get("UR") or [None])[0], "source": "imported_ris", "read_scope": "metadata", "verification": "unverified", "passages": [],
+                                "type": (tags.get("TY") or [None])[0],
+                                "editors": tags.get("ED", []),
+                                "publisher": (tags.get("PB") or [None])[0]})
     elif format.lower() == "bibtex":
         # pybtex handles nested braces, quoted values, and multiline fields.
         from pybtex.database import parse_string
         database = parse_string(text, "bibtex")
         for key, entry in database.entries.items():
-            records.append({"citation_key": key, "title": entry.fields.get("title", "Untitled"), "authors": [str(p) for p in entry.persons.get("author", [])], "year": entry.fields.get("year"), "doi": entry.fields.get("doi"), "url": entry.fields.get("url"), "source": "imported_bibtex", "read_scope": "metadata", "verification": "unverified", "passages": []})
+            records.append({"citation_key": key, "title": entry.fields.get("title", "Untitled"), "authors": [str(p) for p in entry.persons.get("author", [])], "year": entry.fields.get("year"), "doi": entry.fields.get("doi"), "url": entry.fields.get("url"), "source": "imported_bibtex", "read_scope": "metadata", "verification": "unverified", "passages": [],
+                            "type": entry.type,
+                            "editors": [str(p) for p in entry.persons.get("editor", [])],
+                            "publisher": entry.fields.get("publisher")})
     else:
         raise ValueError("Bibliography format must be bibtex or ris")
     for record in records:
