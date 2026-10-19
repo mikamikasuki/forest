@@ -79,6 +79,16 @@ def test_articles_and_legacy_records_keep_existing_export_fields(publication_typ
         "PB  - Example Press\nPY  - 2024\nER  -",
         "ris",
     ),
+    (
+        "TY  - EBOOK\nTI  - A Handbook\nED  - Editor, Casey\n"
+        "PB  - Example Press\nPY  - 2024\nER  -",
+        "ris",
+    ),
+    (
+        "TY  - EDBOOK\nTI  - A Handbook\nED  - Editor, Casey\n"
+        "PB  - Example Press\nPY  - 2024\nER  -",
+        "ris",
+    ),
 ])
 def test_imported_book_bibliographies_keep_their_type(text, format):
     records = sources.import_bibliography(text, format)

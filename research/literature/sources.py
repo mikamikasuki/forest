@@ -65,7 +65,7 @@ def bibtex(records: list[dict]) -> str:
     for i, record in enumerate(records):
         authors = _author_names(record.get("authors"))
         entry_type = "book" if str(record.get("type") or "").lower() in (
-            "book", "edited-book", "monograph", "reference-book"
+            "book", "edited-book", "monograph", "reference-book", "ebook", "edbook"
         ) else "article"
         first_author = authors[0] if authors else "source"
         surname = first_author.split(",", 1)[0].split()[-1]
