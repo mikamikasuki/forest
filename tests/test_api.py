@@ -1711,6 +1711,63 @@ def case_zero_padded_csv_identifiers_survive_data_rows(client, app):
     assert [row['score'] for row in sorted_rows['rows']] == [10.5, 9.5], sorted_rows
 
 
+def case_raw_data_float_precision(client, app):
+    import math
+    import pandas as pd
+    from services.api.db import Session, TaskRun
+
+    project = create(client)
+    node = add_node(client, project, config={
+        'kind': 'command', 'command': [sys.executable, '-c', 'pass'],
+    })
+    run = ok(client.post(f"/api/nodes/{node['id']}/run", json={
+        'request_id': 'run-for-float-precision',
+    }))
+    root = Path(os.environ['FOREST_DATA_DIR']) / 'projects' / project['id']
+    directory = root / run['output_path']
+    directory.mkdir(parents=True, exist_ok=True)
+    values = [0.12345678901234567, 0.0000000000123456789, 1e-30, -1e-30]
+    csv_path = directory / 'precise.csv'
+    csv_path.write_text('value\n' + '\n'.join(map(repr, values)) + '\n')
+    parquet_path = directory / 'precise.parquet'
+    frame = pd.DataFrame({
+        'value': values + [math.nan, math.inf, -math.inf],
+        'label': ['001'] * 7,
+        'when': [pd.Timestamp('2026-01-01')] * 7,
+    })
+    frame.to_parquet(parquet_path)
+    with Session.begin() as session:
+        session.get(TaskRun, run['id']).status = 'completed'
+
+    for path in (csv_path, parquet_path):
+        before = path.read_bytes()
+        response = ok(client.get(f"/api/data/{run['id']}/rows", params={
+            'path': path.relative_to(root).as_posix(),
+        }))
+        returned = [row['value'] for row in response['rows']]
+        # CSV parsing has its own floating-point conversion. This checks that
+        # JSON serialization preserves every bit of the parsed values.
+        if path == csv_path:
+            from services.api.common import infer_csv_column_types
+            expected = infer_csv_column_types(pd.read_csv(path, dtype=str))['value'].tolist()
+        else:
+            expected = values
+        assert returned[:4] == expected, returned
+        assert returned[1] != 0 and returned[2] != 0 and returned[3] != 0
+        if path == parquet_path:
+            assert returned[4:] == [None, None, None], returned
+            assert response['rows'][0]['label'] == '001'
+            assert response['rows'][0]['when'] == 1767225600000
+        assert path.read_bytes() == before
+
+    page = ok(client.get(f"/api/data/{run['id']}/rows", params={
+        'path': parquet_path.relative_to(root).as_posix(),
+        'sort': 'value', 'descending': 'true', 'offset': 1, 'limit': 2,
+    }))
+    assert page['total'] == 7
+    assert [row['value'] for row in page['rows']] == values[:2]
+
+
 def case_run_output_keeps_utf8_character_split_at_page_boundary(client, app):
     project = create(client)
     node = add_node(client, project, config={

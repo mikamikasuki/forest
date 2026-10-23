@@ -321,7 +321,14 @@ def data_rows(ident:str,path:str|None=None,offset:int=0,limit:int=100,filter:str
     with Session() as s: revision=s.scalar(select(FileRevision).where(FileRevision.project_id==pid,FileRevision.path==rel))
     fallback='measured' if run else rec.data.get('source_origin','derived')
     origin=effective_file_origin(revision.origin if revision else None,fallback)
-    return {'columns':list(frame.columns),'rows':json.loads(frame.iloc[max(0,offset):max(0,offset)+min(limit,1000)].to_json(orient='records')),'total':len(frame),'origin':origin}
+    import math
+    page=frame.iloc[max(0,offset):max(0,offset)+min(limit,1000)]
+    rows=json.loads(page.to_json(orient='records'))
+    # Keep pandas' null and date encoding without rounding finite floats.
+    for row,values in zip(rows,page.to_dict(orient='records')):
+        for column,value in values.items():
+            if isinstance(value,float) and math.isfinite(value): row[column]=value
+    return {'columns':list(frame.columns),'rows':rows,'total':len(frame),'origin':origin}
 @router.post('/api/figures/{ident}/render')
 def render_figure(ident:str,body:dict=Body(default={})):
     with Session.begin() as s:
