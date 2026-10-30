@@ -10,7 +10,10 @@ FOOTER_BYTES = 262144
 
 def _delimited_sample(sample, size, content, delimiter):
     """Read a bounded header and rows without treating a prefix as complete."""
-    text=sample.decode('utf-8',errors='ignore')
+    # Keep undecodable bytes as surrogate code points while parsing so an
+    # invalid header cannot silently become a different valid schema. Body
+    # rows are normalized below to preserve their JSON-encodable sample form.
+    text=sample.decode('utf-8',errors='surrogateescape')
     if not text:
         return ([], [], 0, True) if size==0 else ([], [], None, False)
     stream=io.StringIO(text,newline='')
@@ -28,9 +31,13 @@ def _delimited_sample(sample, size, content, delimiter):
     header_complete=sample_complete or consumed<len(text) or text[:consumed].endswith(('\n','\r'))
     if not header_complete:
         return [], [], None, False
+    if any('\udc80' <= char <= '\udcff' for value in header for char in value):
+        return [], [], None, False
     rows=[]
+    row_stream=io.StringIO(text[consumed:].encode('utf-8',errors='surrogateescape').decode('utf-8',errors='ignore'), newline='')
+    row_reader=csv.reader(row_stream,delimiter=delimiter,strict=True)
     try:
-        for row in reader:
+        for row in row_reader:
             rows.append([v[:240] for v in row[:100]])
             if len(rows)==10: break
     except csv.Error:
