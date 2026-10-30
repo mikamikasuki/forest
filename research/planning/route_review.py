@@ -10,9 +10,23 @@ from pathlib import Path
 DEFAULTS = {'enabled': True, 'window': 12, 'repeated_failures': 3,
             'unchanged_counterexample_repeats': 2, 'planning_without_execution': 4, 'review_every_runs': 6}
 CONTROL_KINDS = {'research_plan', 'research_route_review', 'research_analysis', 'ideas', 'suggest_paths'}
+ROUTE_FINDING_KINDS = frozenset({
+    'goal_drift', 'error_accumulation', 'repeated_failure', 'tunnel_vision',
+    'excessive_counterexample_checks', 'other',
+})
+BLOCKING_ROUTE_FINDING_KINDS = frozenset(ROUTE_FINDING_KINDS - {'other'})
 PRIVATE_MATERIALS = {'stdout.txt', 'stderr.txt', 'agent_session.json', 'agent_transcript.json',
                      'task_config.json', 'container_task.json', 'remote_task.json',
                      'secrets.json', 'credentials.json', 'tokens.json'}
+
+
+def _validate_route_finding_kinds(findings):
+    if not isinstance(findings, list):
+        raise ValueError('Route findings must be an array')
+    for finding in findings:
+        kind=finding.get('kind') if isinstance(finding, dict) else None
+        if not isinstance(kind,str) or not kind.strip() or kind not in ROUTE_FINDING_KINDS:
+            raise ValueError('Every route finding needs one of the recognized finding kinds: ' + ', '.join(sorted(ROUTE_FINDING_KINDS)))
 
 
 def review_context_value(value):
@@ -229,6 +243,7 @@ def validate_route_review(report, context):
     findings = report.get('findings')
     if not isinstance(findings, list):
         raise ValueError('Route findings must be an array')
+    _validate_route_finding_kinds(findings)
     for finding in findings:
         if not isinstance(finding, dict) or not isinstance(finding.get('finding'), str) or not finding['finding'].strip():
             raise ValueError('Every route finding needs a concrete explanation')
@@ -243,8 +258,8 @@ def validate_route_review(report, context):
         raise ValueError('The direction needs a question and an explicit probability success event')
     result = deepcopy(report)
     result['recommendation'] = validate_idea(recommendation)
-    blocking_findings = {'goal_drift', 'error_accumulation', 'repeated_failure', 'tunnel_vision', 'excessive_counterexample_checks'}
-    detected = context['route_health']['replan_required'] or any(finding.get('kind') in blocking_findings for finding in findings)
+    detected = context['route_health']['replan_required'] or any(
+        finding['kind'] in BLOCKING_ROUTE_FINDING_KINDS for finding in findings)
     if detected and report['decision'] == 'continue':
         raise ValueError('Detected route defects require a new direction, not continuation of the same route')
     result['evidence_label'] = 'INFERRED'
@@ -254,6 +269,8 @@ def validate_route_review(report, context):
 
 def route_review_transition(control, report, current):
     """Advice to continue never forces a change; missing input stops dispatch."""
+    if 'findings' in report:
+        _validate_route_finding_kinds(report['findings'])
     result = {**control}
     if current and report.get('decision') == 'continue':
         result.update(replan_required=False, phase='EXECUTE')
