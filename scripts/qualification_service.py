@@ -149,7 +149,7 @@ def main(argv=None):
         if status.exists(): print(status.read_text())
         return result.returncode
     if args.action=='remove':
-        subprocess.run(['launchctl','bootout',domain,str(target)],check=False); target.unlink(missing_ok=True); print('Qualification monitors removed; server tasks and reports retained.'); return 0
+        subprocess.run(['launchctl','bootout',domain,str(target)],check=True); target.unlink(missing_ok=True); print('Qualification monitors removed; server tasks and reports retained.'); return 0
     specs(args)
     payload=plistlib.dumps(launchd_definition(args)); rendered=Path(args.log_dir)/f'{LABEL}.plist'; rendered.write_bytes(payload)
     if args.action=='render': print(rendered); return 0
