@@ -168,36 +168,62 @@ def statistical_run_evidence(root, selected):
         for run in selected])
 
 
+def _figure_source_runs(data):
+    if not isinstance(data, dict):
+        return []
+    source_run_ids = data.get('source_run_ids')
+    run_ids = data.get('run_ids')
+    for value in (source_run_ids, run_ids):
+        if value is not None and (
+            not isinstance(value, list)
+            or any(not isinstance(identifier, str) or not identifier.strip() for identifier in value)
+            or len(set(value)) != len(value)
+        ):
+            return None
+    if source_run_ids is not None:
+        if source_run_ids and run_ids and source_run_ids != run_ids:
+            return None
+        return list(source_run_ids)
+    return list(run_ids or [])
+
+
 def manuscript_figures(session, project_id, root, selected, figure_ids=None):
     """Bridge separately rendered studio figures into scientific-run evidence."""
     allowed = {run.id for run in selected}
     rows = list(session.scalars(select(Figure).where(Figure.project_id == project_id)))
     if figure_ids is not None:
-        if not isinstance(figure_ids,list) or len(set(figure_ids)) != len(figure_ids):
+        if (not isinstance(figure_ids, list)
+                or any(not isinstance(identifier, str) or not identifier.strip() for identifier in figure_ids)
+                or len(set(figure_ids)) != len(figure_ids)):
             raise ValueError('figure_ids must be a list of unique project figure IDs')
         lookup = {row.id:row for row in rows}
         if set(figure_ids)-set(lookup): raise ValueError('A selected manuscript figure is unavailable in this project')
         rows = [lookup[identifier] for identifier in figure_ids]
     records = []
     for row in rows:
-        data = row.data; outputs = data.get('outputs',{})
-        linked = data.get('source_run_ids') or data.get('run_ids') or []
-        if linked and not set(linked)<=allowed:
+        data = row.data if isinstance(row.data, dict) else {}
+        outputs = data.get('outputs') if isinstance(data.get('outputs'), dict) else {}
+        linked = _figure_source_runs(data)
+        if not linked:
+            if figure_ids is not None:
+                raise ValueError('Selected figure must declare source runs within the manuscript evidence scope')
+            continue
+        if not set(linked)<=allowed:
             if figure_ids is not None: raise ValueError('Selected figure uses runs outside the manuscript evidence scope')
             continue
         if row.status!='ready_for_review':
             if figure_ids is not None: raise ValueError('Render and review selected figures before generating the manuscript')
             continue
-        path = next((outputs.get(key) for key in ('pdf','png','jpg','jpeg') if outputs.get(key)),None)
+        path = next((outputs.get(key) for key in ('pdf','png','jpg','jpeg') if isinstance(outputs.get(key), str) and outputs.get(key)),None)
         if not path: continue
         asset = safe_path(root,path,True)
         artifacts = {}
         for key in ('source','data','style','report','selection','caption_context'):
-            if outputs.get(key):
+            if isinstance(outputs.get(key), str) and outputs.get(key):
                 original=safe_path(root,outputs[key],True)
                 if original.parent==asset.parent: artifacts[key]=original.name
-        records.append({'id':row.id,'run_id':linked[0] if linked else selected[0].id,
-            'source_run_ids':linked or [selected[0].id],'directory':str(asset.parent),'path':asset.name,
+        records.append({'id':row.id,'run_id':linked[0],
+            'source_run_ids':list(linked),'directory':str(asset.parent),'path':asset.name,
             'caption':data.get('caption') or row.title,'purpose':data.get('purpose',data.get('kind')),
             'anchor':data.get('anchor'),'artifacts':artifacts})
     return records
