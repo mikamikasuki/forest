@@ -8,6 +8,13 @@ The retained project state includes current goals, controls, graph revisions, ru
 
 Each model request has a finite working context. Packing keeps complete native tool exchanges or replaces an exchange with a reference to its saved public record. Provider window errors trigger smaller requests and retrieval under the same spending controls. Long project histories can remain accessible across many requests; retaining a record and understanding its contents are separate operations.
 
+When a complete JSON response is explicitly truncated, output-split recovery
+accepts one independently valid object per chunk and requires a total from 2 to
+64 chunks for that one assembly. Recovery records at most the first 16 missing
+indexes, plus the exact missing count, a truncation flag, and the next required
+index. This is an output assembly bound only. It is not a global cap on the
+task, retained history, or context read steps.
+
 Agent turns and planning cycles do not bound research lifetime. Each executor works for a bounded round, writes an atomic session checkpoint, then yields as `waiting` with `wait_for.type=work_round`. The worker automatically continues the same run and output directory from that checkpoint. Cumulative turns are audit data. Project/provider token, spending and active-time limits still apply to every round and branch; reaching an actual resource hard limit is recorded separately from successful completion.
 
 Set `agent_execution.execution_round.steps` in project configuration, or `execution_round.steps` in a run, to choose the technical work-round size. The default is 30 turns per round. This value controls checkpoint/dispatch cadence; there is no maximum round count or cumulative-step limit. A round that stalls enters diagnosis and graph-aware replanning rather than buying more turns or starting research again.
