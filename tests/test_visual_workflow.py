@@ -150,6 +150,15 @@ def test_external_and_manifest_figure_companions_stay_inside_their_directory(tmp
     invalid[0]['source_run_ids'] = ['not-in-the-evidence']
     with pytest.raises(ValueError, match='supplied completed evidence runs'):
         collect_evidence(runs, figures=invalid)
+    for unbound in (
+        {k: v for k, v in deepcopy(records[0]).items() if k not in ('run_id', 'source_run_ids')},
+        {**deepcopy(records[0]), 'run_id': None, 'source_run_ids': []},
+        {**deepcopy(records[0]), 'run_id': '', 'source_run_ids': ['sum-run']},
+        {**deepcopy(records[0]), 'source_run_ids': []},
+        {**deepcopy(records[0]), 'source_run_ids': None},
+    ):
+        with pytest.raises(ValueError, match='supplied (?:evidence run|completed evidence runs)'):
+            collect_evidence(runs, figures=[unbound])
     run = Path(runs[0]['directory'])
     (run / 'figures.json').write_text(json.dumps([{'id': 'escape', 'directory': records[0]['directory'], 'path': '../studio/figure/figure.pdf'}]))
     with pytest.raises(ValueError, match='inside its evidence run'):

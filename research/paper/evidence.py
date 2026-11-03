@@ -197,13 +197,23 @@ def collect_evidence(runs, sources=None, claims=None, *, required_run_ids=None, 
                                        'measurement_status': 'reported_by_completed_run'})
     seen_figures = set()
     for figure in figure_records:
-        run_id, figure_id = str(figure['run_id']), str(figure['id'])
+        raw_run_id, raw_figure_id = figure.get('run_id'), figure.get('id')
+        if (raw_run_id is None or isinstance(raw_run_id, bool) or not isinstance(raw_run_id, (str, int)) or not str(raw_run_id).strip()
+                or raw_figure_id is None or isinstance(raw_figure_id, bool) or not isinstance(raw_figure_id, (str, int)) or not str(raw_figure_id).strip()):
+            raise ValueError('Figures require a unique ID and a supplied evidence run')
+        run_id, figure_id = str(raw_run_id), str(raw_figure_id)
         if run_id not in run_directories or figure_id in seen_figures:
             raise ValueError('Figures require a unique ID and a supplied evidence run')
         directory = Path(figure.get('directory', run_directories[run_id])).resolve() if figure['_explicit_artifact'] else run_directories[run_id]
         source_run_ids = figure.get('source_run_ids', [run_id])
-        if not isinstance(source_run_ids, list) or not source_run_ids or len({str(identifier) for identifier in source_run_ids}) != len(source_run_ids) or run_id not in {str(identifier) for identifier in source_run_ids} or any(str(identifier) not in run_directories for identifier in source_run_ids):
+        if (not isinstance(source_run_ids, list) or not source_run_ids
+                or any(identifier is None or isinstance(identifier, bool) or not isinstance(identifier, (str, int)) or not str(identifier).strip() for identifier in source_run_ids)
+                or len({str(identifier) for identifier in source_run_ids}) != len(source_run_ids)
+                or run_id not in {str(identifier) for identifier in source_run_ids}
+                or any(str(identifier) not in run_directories for identifier in source_run_ids)):
             raise ValueError('Figure source runs must belong to the supplied completed evidence runs')
+        if not isinstance(figure.get('path'), str) or not figure['path'].strip():
+            raise ValueError('Figure records require a path')
         path = (directory / figure['path']).resolve()
         if not path.is_relative_to(directory) or not path.is_file() or path.suffix.lower() not in {'.pdf', '.png', '.jpg', '.jpeg'}:
             raise ValueError('Figure must be an actual PDF, PNG or JPEG inside its evidence run or admitted artifact directory')
