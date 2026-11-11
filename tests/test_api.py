@@ -460,6 +460,57 @@ def case_agent_import_stable_identifiers_preserve_sources(client, app):
         patch.undo()
 
 
+def case_agent_local_pdf_does_not_inherit_unrelated_acceptance_title(client, app):
+    from research.literature import agent_tools
+    from services.api.common import project_dir
+
+    project = create(client)
+    workspace = project_dir(project["id"])
+    workspace.mkdir(parents=True, exist_ok=True)
+    pdf = workspace / "Unrelated-Local-Study.pdf"
+    pdf.write_bytes(pdf_bytes("Unrelated Local Study"))
+    acceptance_text = workspace / "acceptance.txt"
+    acceptance_text.write_text("Attention is All you Need", encoding="utf-8")
+
+    patch = pytest.MonkeyPatch()
+    try:
+        patch.setattr(agent_tools, "_official", lambda *_args: True)
+        patch.setattr(agent_tools, "read_page", lambda *_args: {
+            "url": "https://papers.nips.cc/paper/2017/hash/example-Abstract.html",
+            "title": "Attention is All you Need",
+            "text": "Attention is All you Need",
+            "text_path": str(acceptance_text),
+        })
+
+        result = agent_tools.import_source(
+            project["id"], workspace,
+            {"identifier": pdf.name,
+             "acceptance_url": "https://papers.nips.cc/paper/2017/hash/example-Abstract.html"},
+            "agent-unrelated-local-pdf",
+        )
+
+        source = result["source"]["data"]
+        assert result["source"]["title"] == "Unrelated-Local-Study"
+        assert "acceptance_url" not in source
+        assert "acceptance_kind" not in source
+        assert "acceptance-record" not in {p["id"] for p in source["passages"]}
+
+        matching_pdf = workspace / "Attention-is-All-you-Need.pdf"
+        matching_pdf.write_bytes(pdf_bytes("Attention is All you Need"))
+        matching = agent_tools.import_source(
+            project["id"], workspace,
+            {"identifier": matching_pdf.name,
+             "acceptance_url": "https://papers.nips.cc/paper/2017/hash/example-Abstract.html"},
+            "agent-matching-local-pdf",
+        )["source"]["data"]
+        assert matching["title"] == "Attention is All you Need"
+        assert matching["acceptance_url"].endswith("example-Abstract.html")
+        assert matching["acceptance_title_match"] is True
+        assert "acceptance-record" in {p["id"] for p in matching["passages"]}
+    finally:
+        patch.undo()
+
+
 def case_graph_receipts_cycles_and_schema(client, app):
     p = create(client)
     path = f"/api/projects/{p['id']}/graph/commands"
