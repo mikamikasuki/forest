@@ -40,6 +40,7 @@ def import_source(project_id,workspace,arguments,action_id):
         record={**record,'pdf_path':pdf,'passages':extract_pdf(pdf),'read_scope':'full_text'}
     acceptance=arguments.get('acceptance_url')
     if acceptance:
+        attach_acceptance=True
         kind='official_decision' if 'openreview.net/forum' in acceptance else 'official_proceedings'
         if not _official(acceptance,kind):
             raise ValueError('Use the actual official proceedings/journal record or sourced OpenReview decision URL')
@@ -53,13 +54,26 @@ def import_source(project_id,workspace,arguments,action_id):
             first_pages=' '.join(p.get('text','') for p in record.get('passages',[]) if isinstance(p.get('page'),int) and p['page']<=2)
             if record.get('read_scope')=='full_text' and not title_in_text(title,first_pages):
                 raise ValueError('The supplied title does not match the actual imported full text; import the matching paper PDF')
-        elif page.get('title') and record.get('source') in ('local_pdf','public_pdf'):
-            record['title']=page['title']
-        record={**record,'acceptance_url':page['url'],'acceptance_kind':kind,
-                'acceptance_read_scope':'observed_public_page',
-                'acceptance_title_match':bool(title),
-                'passages':[*record.get('passages',[]),{'id':'acceptance-record','page':None,'section':'Official publication/decision record','text':page['text'],'source_url':page['url']}],
-                'acceptance_text_path':str(Path(page['text_path']).relative_to(root))}
+        elif record.get('source') in ('local_pdf','public_pdf'):
+            # Without an explicit title, only attach publication provenance when
+            # the observed PDF title is present in both the official record and
+            # the imported document itself. Otherwise preserve the PDF as an
+            # independent source instead of pairing it with an unrelated paper.
+            observed_title=record.get('title') or ''
+            first_pages=' '.join(p.get('text','') for p in record.get('passages',[]) if isinstance(p.get('page'),int) and p['page']<=2)
+            attach_acceptance=bool(
+                page.get('title') and first_pages
+                and title_in_text(observed_title,page['title']+' '+page.get('text',''))
+                and title_in_text(observed_title,first_pages)
+            )
+        if attach_acceptance:
+            if not title and record.get('source') in ('local_pdf','public_pdf'):
+                record['title']=page['title']
+            record={**record,'acceptance_url':page['url'],'acceptance_kind':kind,
+                    'acceptance_read_scope':'observed_public_page',
+                    'acceptance_title_match':bool(title) or bool(record.get('source') in ('local_pdf','public_pdf')),
+                    'passages':[*record.get('passages',[]),{'id':'acceptance-record','page':None,'section':'Official publication/decision record','text':page['text'],'source_url':page['url']}],
+                    'acceptance_text_path':str(Path(page['text_path']).relative_to(root))}
     if arguments.get('title'):
         record['title']=arguments['title']
     if record.get('pdf_path'):
