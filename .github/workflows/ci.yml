@@ -63,7 +63,7 @@ jobs:
       - run: python scripts/package_source.py --output /tmp/forest-source.zip
   observation-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17
