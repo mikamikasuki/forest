@@ -17,9 +17,16 @@ function FactRow({ fact }: { fact: Fact }) {
 export function narrativeDraftAfterSettingsLoad(
   incoming: SettingsView["settings"],
   current: SettingsView["settings"] | null,
-  editing: boolean,
+  dirty: boolean,
 ) {
-  return editing && current ? current : incoming;
+  return dirty && current ? current : incoming;
+}
+export function narrativeSettingsDiffer(a: SettingsView["settings"], b: SettingsView["settings"]) {
+  return a.enabled !== b.enabled
+    || a.automatic !== b.automatic
+    || a.provider_id !== b.provider_id
+    || a.cap_usd !== b.cap_usd
+    || a.max_requests !== b.max_requests;
 }
 export function ProgressPanel({ projectId }: { projectId: string }) {
   const { t, action } = useUI();
@@ -29,16 +36,23 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
   const providers = useLoad<{ id: string; name: string; model: string; status: string }[]>(`/providers`, []);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<SettingsView["settings"] | null>(null);
+  const [draftDirty, setDraftDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const updateDraft = (patch: Partial<SettingsView["settings"]>) => {
+    if (!draft) return;
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    setDraftDirty(settings.data?.settings ? narrativeSettingsDiffer(next, settings.data.settings) : true);
+  };
   useEffect(() => {
     const timer = setInterval(() => { void latest.reload(); }, 5000);
     return () => clearInterval(timer);
   }, [latest.reload]);
   useEffect(() => {
     if (settings.data?.settings) {
-      setDraft((current) => narrativeDraftAfterSettingsLoad(settings.data!.settings, current, editing));
+      setDraft((current) => narrativeDraftAfterSettingsLoad(settings.data!.settings, current, draftDirty));
     }
-  }, [settings.data, editing]);
+  }, [settings.data, draftDirty]);
   useEffect(() => { void settings.reload(); }, [latest.data?.id, latest.data?.status, settings.reload]);
   const sections = [["now", "现在", "Now"], ["attention", "需要处理", "Needs attention"], ["blocked", "受阻", "Blocked"],
     ["recent", "最近变化", "Recent changes"], ["next", "已排队工作", "Next planned work"], ["evidence", "证据与交付", "Evidence and delivery"]] as const;
@@ -61,14 +75,14 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
       <p>Automatic narration is opt-in. Requests share provider/project limits and the ModelRequest ledger. Local Codex subscription usage has no USD price; the request cap applies.</p>
       {draft && <form onSubmit={(event) => { event.preventDefault(); void action(async () => {
         const value = await api<SettingsView>(`/projects/${projectId}/reporter-settings`, "PATCH", { settings: draft, expected_version: settings.data!.version });
-        settings.setData(value); setEditing(false);
+        settings.setData(value); setDraft(value.settings); setDraftDirty(false); setEditing(false);
       }); }}>
-        <label><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />Enable narrative</label>
-        <label><input type="checkbox" checked={draft.automatic} onChange={(e) => setDraft({ ...draft, automatic: e.target.checked })} />Automatic meaningful-event refresh</label>
-        <Field label="Narrative provider"><select aria-label="Narrative provider" value={draft.provider_id || ""} onChange={(e) => setDraft({ ...draft, provider_id: e.target.value || null })}>
+        <label><input type="checkbox" checked={draft.enabled} onChange={(e) => updateDraft({ enabled: e.target.checked })} />Enable narrative</label>
+        <label><input type="checkbox" checked={draft.automatic} onChange={(e) => updateDraft({ automatic: e.target.checked })} />Automatic meaningful-event refresh</label>
+        <Field label="Narrative provider"><select aria-label="Narrative provider" value={draft.provider_id || ""} onChange={(e) => updateDraft({ provider_id: e.target.value || null })}>
           <option value="">Choose provider</option>{providers.data.filter((p) => p.status !== "retired").map((p) => <option key={p.id} value={p.id}>{p.name} · {p.model}</option>)}</select></Field>
-        <Field label="Reporting cap (USD)"><input type="number" min="0" max="10000" step="0.01" value={draft.cap_usd} onChange={(e) => setDraft({ ...draft, cap_usd: Number(e.target.value) })} /></Field>
-        <Field label="Reporting request cap"><input type="number" min="1" max="1000" value={draft.max_requests} onChange={(e) => setDraft({ ...draft, max_requests: Number(e.target.value) })} /></Field>
+        <Field label="Reporting cap (USD)"><input type="number" min="0" max="10000" step="0.01" value={draft.cap_usd} onChange={(e) => updateDraft({ cap_usd: Number(e.target.value) })} /></Field>
+        <Field label="Reporting request cap"><input type="number" min="1" max="1000" value={draft.max_requests} onChange={(e) => updateDraft({ max_requests: Number(e.target.value) })} /></Field>
         <Button type="submit">Save narrative settings</Button>
       </form>}
       <p>{settings.data?.requests || 0} reporting requests · estimated ${settings.data?.estimated_usd || 0} · reserved ${settings.data?.reserved_usd || 0}
