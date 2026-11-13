@@ -59,6 +59,33 @@ def test_codex_action_schema_follows_effective_permissions(monkeypatch):
     client.complete(messages)
 
 
+@pytest.mark.parametrize('limit', [1, 7])
+def test_codex_transport_applies_per_request_output_limit(monkeypatch, limit):
+    from research.agents import codex_transport
+
+    provider = {'id': 'test-only', 'kind': 'codex_cli', 'base_url': 'http://127.0.0.1',
+                'model': 'gpt-6-luna', 'config': {'reasoning_effort': 'high'}}
+    events = []
+    client = ModelClient(provider, request_guard=lambda event: events.append(event) or len(events))
+    messages = [{'role': 'user', 'content': 'Return the finish action'}]
+
+    def child(argv, **kwargs):
+        config_values = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == '--config']
+        assert f'model_max_output_tokens={limit}' in config_values
+        return SimpleNamespace(returncode=0, stdout='\n'.join(json.dumps(event) for event in [
+            {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': '{"tool":"finish","arguments":{}}'}},
+            {'type': 'turn.completed', 'usage': {'input_tokens': 10, 'output_tokens': 5}},
+        ]), stderr='')
+
+    monkeypatch.setattr(codex_transport.shutil, 'which', lambda value: '/verified/test/codex')
+    monkeypatch.setattr(codex_transport.subprocess, 'run', child)
+
+    client.complete(messages, max_output_tokens=limit)
+
+    assert events[0]['phase'] == 'before'
+    assert events[0]['max_output_tokens'] == limit
+
+
 _MISSING = object()
 
 
