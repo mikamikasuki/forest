@@ -527,8 +527,26 @@ def cleanup(body:dict=Body(...)):
                 for run in s.scalars(select(TaskRun).where(TaskRun.project_id==project_id,
                         TaskRun.finished_at<cutoff,TaskRun.status.in_(TERMINAL)).with_for_update()):
                     from services.interventions.controls import close_unconsumed
+                    # Keep the run and cached observations retryable until disk removal succeeds.
+                    if run.output_path:
+                        output=safe_path(project_dir(project_id),run.output_path)
+                        if output==project_dir(project_id).resolve():
+                            error('CLEANUP_FAILED','Refusing to remove the project directory',500)
+                        try:
+                            shutil.rmtree(output)
+                        except FileNotFoundError:
+                            # A prior attempt may have removed files before its DB transaction failed.
+                            if output.exists():
+                                error('CLEANUP_FAILED',f'Could not remove output for run {run.id}',500,retryable=True)
+                        except OSError:
+                            error('CLEANUP_FAILED',f'Could not remove output for run {run.id}',500,retryable=True)
+                    # Observation writers acquire this same project lock before updating scopes.
+                    # Deleting their parent rows cascades to cached ObservedFile bytes.
+                    from services.observation.models import ObservationScope
+                    s.execute(delete(ObservationScope).where(ObservationScope.project_id==project_id,
+                        ObservationScope.object_id==run.id,
+                        ObservationScope.kind.in_(('run_output','run_workspace','remote_workspace'))))
                     close_unconsumed(s,run)
-                    shutil.rmtree(safe_path(project_dir(project_id),run.output_path),ignore_errors=True)
                     touch_dependents(s,project_id,run.id); s.delete(run); removed+=1
             if body.get('clear_edit_history'):
                 project.graph_meta={key:value for key,value in project.graph_meta.items() if key!='_history'}

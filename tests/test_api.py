@@ -2478,6 +2478,81 @@ def case_invalid_task_kind_does_not_write_graph_or_enqueue(client, app):
                      for model in (CommandReceipt, Intervention, TaskRun)) == counts
 
 
+
+def cleanup_observed_run(client):
+    import datetime as dt
+    from services.api.common import project_dir
+    from services.api.db import Session, TaskRun
+    from services.observation.files import sync_scopes, reconcile
+    from services.observation.models import ObservationScope
+    from sqlalchemy import select
+    project = create(client)
+    with Session.begin() as session:
+        run = TaskRun(project_id=project['id'], request_id='cleanup-observed', kind='command',
+                      status='completed', config={'remote': True},
+                      finished_at=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=90)).isoformat())
+        session.add(run); session.flush()
+        run.output_path = f'runs/{run.id}'
+        run_id = run.id
+        output = project_dir(project['id']) / run.output_path
+        (output / 'workspace').mkdir(parents=True)
+        (output / 'sentinel.txt').write_text('private output bytes')
+        (output / 'workspace' / 'work.txt').write_text('private workspace bytes')
+        sync_scopes(session, project['id'])
+        session.flush()
+        scope_ids = list(session.scalars(select(ObservationScope.id).where(ObservationScope.object_id == run_id)))
+    for scope_id in scope_ids:
+        reconcile(scope_id)
+    return project, run_id, output, scope_ids
+
+
+def case_cleanup_removes_observation_bytes(client, app):
+    from sqlalchemy import select
+    from services.api.db import Session, TaskRun
+    from services.observation.models import ObservationScope, ObservedFile
+    project, run_id, output, scope_ids = cleanup_observed_run(client)
+    with Session() as session:
+        assert len(scope_ids) == 3
+        assert session.scalar(select(ObservedFile).where(ObservedFile.scope_id.in_(scope_ids),
+                                                       ObservedFile.content.is_not(None))) is not None
+    assert ok(client.post('/api/settings/cleanup', json={'days':30, 'project_id':project['id']})) == {'deleted_runs':1}
+    assert not output.exists()
+    with Session() as session:
+        assert session.get(TaskRun, run_id) is None
+        assert not list(session.scalars(select(ObservationScope).where(ObservationScope.id.in_(scope_ids))))
+        assert not list(session.scalars(select(ObservedFile).where(ObservedFile.scope_id.in_(scope_ids))))
+        assert session.scalar(select(ObservationScope).where(ObservationScope.kind=='project',
+                                                            ObservationScope.project_id==project['id'])) is not None
+
+
+def case_cleanup_failed_removal_retains_retry_identity(client, app):
+    from unittest.mock import patch
+    from sqlalchemy import select
+    from services.api.db import Session, TaskRun
+    from services.observation.models import ObservedFile
+    project, run_id, output, scope_ids = cleanup_observed_run(client)
+    # Deterministic filesystem denial, including when tests run as root.
+    for failure in (PermissionError('fixture denial'), FileNotFoundError('missing child')):
+        def denied(path, **kwargs):
+            if not kwargs.get('ignore_errors'): raise failure
+        with patch('services.api.main.shutil.rmtree', side_effect=denied):
+            response = client.post('/api/settings/cleanup', json={'days':30, 'project_id':project['id']})
+        detail = ok(response, 500)['detail']
+        assert detail['code'] == 'CLEANUP_FAILED' and detail['retryable'] is True
+    assert (output / 'sentinel.txt').read_text() == 'private output bytes'
+    with Session() as session:
+        assert session.get(TaskRun, run_id) is not None
+        assert session.scalar(select(ObservedFile).where(ObservedFile.scope_id.in_(scope_ids),
+                                                       ObservedFile.content.is_not(None))) is not None
+    # A previous attempt can already have removed the directory before DB commit.
+    import shutil
+    shutil.rmtree(output)
+    assert ok(client.post('/api/settings/cleanup', json={'days':30, 'project_id':project['id']})) == {'deleted_runs':1}
+    with Session() as session:
+        assert session.get(TaskRun, run_id) is None
+        assert not list(session.scalars(select(ObservedFile).where(ObservedFile.scope_id.in_(scope_ids))))
+
+
 CASES = [name.removeprefix("case_") for name in list(globals()) if name.startswith("case_")]
 
 
