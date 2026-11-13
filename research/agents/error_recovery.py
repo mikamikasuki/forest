@@ -72,7 +72,20 @@ def observe_tool_result(state, tool, result, step, *, arguments=None):
         if recovery.get('diagnosis_pending') and (tool in DIAGNOSTIC_TOOLS or tool in SUBSTANTIVE_TOOLS):
             event = {'step': step, 'state': 'diagnosis_observed', 'tool': tool,
                      'prior_category': recovery.get('last_category')}
+            diagnosis_operation = recovery.get('diagnosis_operation')
+            if diagnosis_operation is None:
+                diagnosis_event = next((item for item in reversed(recovery.get('history', []))
+                                        if item.get('state') == 'diagnosis_required'), None)
+                if diagnosis_event:
+                    diagnosis_operation = diagnosis_event.get('operation')
+            if event['prior_category'] == 'environment_error' and diagnosis_operation:
+                operation = next((item for item in recovery.get('operation_failures', [])
+                                  if item['operation'] == diagnosis_operation), None)
+                if operation and operation.get('failure', {}).get('category') == 'environment_error':
+                    operation['rejected'] = False
+                    event['retry_unblocked'] = True
             recovery['diagnosis_pending'] = False
+            recovery['diagnosis_operation'] = None
             recovery.setdefault('history', []).append(event)
             return event, 'continue'
         return None, 'continue'
@@ -82,7 +95,8 @@ def observe_tool_result(state, tool, result, step, *, arguments=None):
         event = {'step': step, **failure, 'repeat_count': recovery.get('repeat_count', 0) + 1,
                  'state': 'budget_exhausted'}
         recovery.update(last_category=failure['category'], repeat_count=event['repeat_count'],
-                        diagnosis_pending=False, last_error=failure['message'], last_failure_tool=tool)
+                        diagnosis_pending=False, diagnosis_operation=None,
+                        last_error=failure['message'], last_failure_tool=tool)
         recovery.setdefault('history', []).append(event)
         return event, 'block'
     count = recovery.get('repeat_count', 0) + 1 if prior_category == failure['category'] else 1
@@ -103,7 +117,8 @@ def observe_tool_result(state, tool, result, step, *, arguments=None):
              'operation': signature, 'action_failures': operation['count']}
     recovery.update(last_category=failure['category'], repeat_count=count,
                     diagnosis_pending=outcome == 'diagnose', last_error=failure['message'],
-                    last_failure_tool=tool)
+                    last_failure_tool=tool,
+                    diagnosis_operation=signature if outcome == 'diagnose' else None)
     recovery.setdefault('history', []).append(event)
     return event, outcome
 
