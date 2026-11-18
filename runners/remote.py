@@ -250,7 +250,10 @@ def execute_remote(config, workspace, output, env=None, require_metrics=False):
         if not command: raise ValueError('Remote execution requires a command')
         argv = ['/bin/sh', '-c', command] if isinstance(command, str) else command
         forwarded = {'FOREST_RUN_ID': os.environ.get('FOREST_RUN_ID', ''), 'FOREST_ATTEMPT_ID': os.environ.get('FOREST_ATTEMPT_ID', ''), 'FOREST_RUN_DIR': workdir}
-        job = runner.start(argv, workdir, task_id=task_id, env={**forwarded, **remote.get('env', {})}, timeout=config.get('timeout'))
+        # Remote-specific settings override task defaults, but execution identity
+        # and the remote run directory always belong to the worker/adapter.
+        task_env = {**(config.get('env') or {}), **remote.get('env', {}), **forwarded}
+        job = runner.start(argv, workdir, task_id=task_id, env=task_env, timeout=config.get('timeout'))
         job['workdir'] = workdir
         temporary = handle_path.with_suffix('.tmp'); temporary.write_text(json.dumps(job, indent=2)); temporary.replace(handle_path)
     if job.get('status') == 'cancelled': raise RuntimeError('Remote launch was cancelled before execution')
