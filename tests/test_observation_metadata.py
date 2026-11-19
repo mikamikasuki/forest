@@ -108,6 +108,85 @@ def test_undecodable_bytes_keep_header_total_unknown_for_complete_and_sampled_fi
 
 
 @pytest.mark.parametrize('suffix,delimiter', [('.csv', ','), ('.tsv', '\t')])
+@pytest.mark.parametrize('size', [64, 262145])
+def test_invalid_utf8_in_header_is_unknown_without_losing_source_bytes(tmp_path, suffix, delimiter, size):
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    delimiter_bytes = delimiter.encode()
+    header = b'name' + b'\xff' + delimiter_bytes + b'value\n'
+    payload = header + b'1' + delimiter_bytes + b'2\n' + b'x' * max(0, size - len(header) - 4)
+    path = root / f'invalid-header{suffix}'
+    path.write_bytes(payload)
+
+    data, envelope = regular_read(root, path.name)
+
+    metadata = envelope['metadata']
+    if len(payload) <= 262144:
+        assert data == payload
+    else:
+        assert data is None
+    assert metadata['total_columns'] is None
+    assert metadata['columns'] == []
+    assert metadata['columns_truncated'] is True
+
+
+@pytest.mark.parametrize('suffix,delimiter', [('.csv', ','), ('.tsv', '\t')])
+def test_valid_header_survives_invalid_body_and_partial_utf8_sample(tmp_path, suffix, delimiter):
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    delimiter_bytes = delimiter.encode()
+    header = b'name' + delimiter_bytes + b'value\n'
+    row = b'body' + b'\xff' + delimiter_bytes + b'row\n'
+    filler = b'x' * (32768 - len(header) - len(row) - 1)
+    payload = header + row + filler + b'\xc3\xa9' + b'x' * (262145 - 32768)
+    path = root / f'valid-header{suffix}'
+    path.write_bytes(payload)
+
+    _, envelope = regular_read(root, path.name)
+
+    metadata = envelope['metadata']
+    assert metadata['total_columns'] == 2
+    assert metadata['columns'] == ['name', 'value']
+    assert metadata['sample_rows'][0] == ['body', 'row']
+    assert metadata['columns_truncated'] is False
+    assert len(json.dumps(metadata, ensure_ascii=False).encode()) <= 8192
+
+
+@pytest.mark.parametrize('suffix,delimiter', [('.csv', ','), ('.tsv', '\t')])
+def test_invalid_body_after_quoted_field_preserves_row_sampling(tmp_path, suffix, delimiter):
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    delimiter_bytes = delimiter.encode()
+    payload = b'name' + delimiter_bytes + b'value\n"body"\xff' + delimiter_bytes + b'row\n'
+    path = root / f'quoted-body{suffix}'
+    path.write_bytes(payload)
+
+    _, envelope = regular_read(root, path.name)
+
+    metadata = envelope['metadata']
+    assert metadata['columns'] == ['name', 'value']
+    assert metadata['total_columns'] == 2
+    assert metadata['sample_rows'] == [['body', 'row']]
+    assert metadata['columns_truncated'] is False
+
+
+def test_valid_replacement_character_in_header_is_preserved(tmp_path):
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    payload = 'name�,value\n1,2\n'.encode()
+    path = root / 'unicode-header.csv'
+    path.write_bytes(payload)
+
+    data, envelope = regular_read(root, path.name)
+
+    assert data == payload
+    metadata = envelope['metadata']
+    assert metadata['columns'] == ['name�', 'value']
+    assert metadata['total_columns'] == 2
+    assert metadata['columns_truncated'] is False
+
+
+@pytest.mark.parametrize('suffix,delimiter', [('.csv', ','), ('.tsv', '\t')])
 def test_metadata_json_pruning_marks_column_omission(tmp_path, suffix, delimiter):
     root = tmp_path / 'workspace'
     root.mkdir()
@@ -129,7 +208,8 @@ def test_metadata_json_pruning_marks_column_omission(tmp_path, suffix, delimiter
     assert len(json.dumps(metadata, ensure_ascii=False).encode()) <= 8192
 
 
-def test_source_endpoint_returns_delimited_metadata_without_starting_lifespan():
+@pytest.mark.parametrize('invalid_header', [False, True])
+def test_source_endpoint_returns_delimited_metadata_without_starting_lifespan(invalid_header):
     """Exercise the actual source route against a synthetic project."""
     from fastapi.testclient import TestClient
     from sqlalchemy import select
@@ -161,8 +241,11 @@ def test_source_endpoint_returns_delimited_metadata_without_starting_lifespan():
             scope_id = scope.id
         workspace.mkdir(parents=True, exist_ok=True)
         path = workspace / 'columns.csv'
-        columns = [f'field_{index:03d}' for index in range(101)]
-        path.write_bytes((','.join(columns) + '\n' + ('value,' * 100) + 'value\n' + 'x' * 300000).encode())
+        if invalid_header:
+            path.write_bytes(b'name\xff,value\n1,2\n' + b'x' * 300000)
+        else:
+            columns = [f'field_{index:03d}' for index in range(101)]
+            path.write_bytes((','.join(columns) + '\n' + ('value,' * 100) + 'value\n' + 'x' * 300000).encode())
         reconcile(scope_id)
 
         listing = client.get(f'/api/projects/{project_id}/progress/sources', params={'scope_id': scope_id})
@@ -173,7 +256,12 @@ def test_source_endpoint_returns_delimited_metadata_without_starting_lifespan():
         resolved_body = resolved.json()
         assert resolved_body['availability'] == 'unavailable'
         metadata = resolved_body['metadata']
-        assert metadata['total_columns'] == 101
-        assert metadata['columns_truncated'] is True
+        if invalid_header:
+            assert metadata['total_columns'] is None
+            assert metadata['columns'] == []
+            assert metadata['columns_truncated'] is True
+        else:
+            assert metadata['total_columns'] == 101
+            assert metadata['columns_truncated'] is True
     finally:
         client.close()
