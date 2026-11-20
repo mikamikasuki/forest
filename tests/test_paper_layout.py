@@ -175,3 +175,85 @@ Queued large actual layout panels.
     current=(tmp_path/'paper.tex').read_text()
     assert current.count('FOREST placement repair before argument:target')==1
     assert source.count('\\caption')==current.count('\\caption')
+
+
+@pytest.mark.parametrize('environment', ['tabular', 'longtable'])
+def test_reflow_counts_only_outer_row_breaks(tmp_path, environment):
+    # A real multi-line owner edit at a panel boundary and a second-row
+    # nested environment exercise the same parser through both callers.
+    cell = r'\shortstack{one\\two\\three\\four\\five}'
+    nested = r'\begin{tabular}[t]{@{}l@{}}Left\\Right\end{tabular}'
+    edited = r'{\footnotesize Percent \% and \{brace\}}'
+    header = '\\toprule\n' + r'Label & Value \\' + '\n\\midrule[0.5pt]\n'
+    rows = '\n'.join([
+        cell + r' & 1 \\',
+        nested + r' & 2 \\',
+        r'\begingroup Three\endgroup & 3 % ignore this \\ and }',
+        r'\\',
+        r'Four & 4 \\[2pt]',
+        r'\addlinespace[3pt]',
+        edited + r' & 5 \tabularnewline % retain final note',
+    ]) + '\n'
+    if environment == 'tabular':
+        table = (r'\begin{table}\small\caption{Observed rows}\label{tab:rows}' + '\n' +
+                 r'\begin{tabular}{lr}' + '\n' + header + rows + r'\bottomrule\end{tabular}\end{table}')
+    else:
+        table = (r'\begin{longtable}{lr}\caption{Observed rows}\label{tab:rows}\\' + '\n' +
+                 header + '\\endfirsthead\n' + header + '\\endhead\n\\bottomrule\n\\endfoot\n' +
+                 rows + r'\end{longtable}')
+    source_path = tmp_path / 'paper.tex'
+    inactive = r'% \begin{longtable}{l} commented draft \end{longtable}'
+    source_path.write_text('\\documentclass{article}\n\\usepackage{booktabs,longtable}\n\\begin{document}\n' +
+                           inactive + '\n' + table + '\n\\end{document}\n')
+    before = compile_paper(tmp_path, repair_layout=False)
+    if before['status'] != 'unavailable':
+        assert before['status'] == 'completed', before['log']
+    plan = apply_layout(tmp_path, {'columns': 'single' if environment == 'tabular' else 'double',
+                                   'max_table_rows': 4})
+    current = source_path.read_text()
+    assert inactive in current
+    assert plan['config']['columns'] == ('single' if environment == 'tabular' else 'double')
+    assert current.count(r'\begin{table') == 2
+    assert current.count(r'\label{tab:rows}') == 1
+    assert current.count(cell) == current.count(nested) == current.count(edited) == 1
+    assert current.count('% retain final note') == 1
+    assert 'Four & 4 ' + r'\\[2pt]' + '\n' + r'\addlinespace[3pt]' in current
+    assert r'5 \tabularnewline % retain final note' in current
+    assert current.count(r'\midrule[0.5pt]') == 2
+    assert r'\begingroup Three\endgroup & 3 % ignore this \\ and }' + '\n' + r'\\' in current
+    table_plans = [block for block in plan['blocks'] if block['type'] == 'table']
+    assert sum(block['rows'] for block in table_plans) == 5
+    assert sum(block['panels'] for block in table_plans) == 2
+    after = compile_paper(tmp_path, repair_layout=False)
+    if before['status'] == 'unavailable':
+        pytest.skip('Actual TeX compiler required to check that the reflowed source compiles')
+    assert after['status'] == 'completed', after['log']
+
+
+@pytest.mark.parametrize('environment', ['tabular', 'longtable'])
+@pytest.mark.parametrize('row_suffix', [r'[\dimexpr 1pt\relax]', '*'])
+def test_reflow_leaves_custom_row_breaks_intact(tmp_path, environment, row_suffix):
+    header = r'\toprule Label \\ \midrule' + '\n'
+    rows = r'First \\' + row_suffix + '\n' + r'Second \\' + '\n'
+    if environment == 'tabular':
+        table = (r'\begin{table}[t]\small\begin{tabular}{l}' + header + rows +
+                 r'\bottomrule\end{tabular}\end{table}')
+    else:
+        table = (r'\begin{longtable}{l}\caption{Observed rows}\\' + '\n' +
+                 header + '\\endfirsthead\n' + header + '\\endhead\n\\bottomrule\n\\endfoot\n' +
+                 rows + r'\end{longtable}')
+    source_path = tmp_path / 'paper.tex'
+    source_path.write_text('\\documentclass{article}\n\\usepackage{booktabs,longtable}\n\\begin{document}\n' +
+                           table + '\n\\end{document}\n')
+    config = {'columns': 'single' if environment == 'tabular' else 'double',
+              'max_table_rows': 4, 'table_font_pt': 10}
+    plan = apply_layout(tmp_path, config)
+    assert table in source_path.read_text()
+    assert plan['config']['columns'] == 'single'
+    assert [warning['code'] for warning in plan['warnings']] == [
+        'custom_table_row_limit_unapplied' if environment == 'tabular' else 'custom_longtable_requires_review'
+    ]
+    compiled = compile_paper(tmp_path, repair_layout=False)
+    if compiled['status'] == 'unavailable':
+        pytest.skip('Actual TeX compiler required to check that the retained source compiles')
+    assert compiled['status'] == 'completed', compiled['log']
