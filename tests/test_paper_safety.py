@@ -105,6 +105,45 @@ def case_manual_edits_proposal_and_safe_apply(client):
     assert ok(client.get('/api/reviews/' + fresh['review_id']))['status'] == 'applied'
 
 
+def case_failed_second_file_restores_the_manuscript_pair(client):
+    from fastapi.testclient import TestClient
+    from services.api.common import project_dir
+    from services.api.main import app
+    pid = project(client)
+    publish(pid, enqueue_generation(pid), bundle(pid, 'initial', 'Initial text. '))
+    paper = ok(client.get('/api/papers/' + pid))
+    stable = project_dir(pid) / 'paper'
+    old_source = (stable / 'paper.tex').read_text()
+    old_bibtex = (stable / 'references.bib').read_text()
+    revisions = {name: ok(client.get('/api/projects/' + pid + '/file', params={'path': 'paper/' + name}))['revision']
+                 for name in ('paper.tex', 'references.bib')}
+    replace = Path.replace
+    staged = []
+
+    def failing_second_replace(self, target):
+        if self.name.endswith('.forest-tmp'):
+            staged.append(self.name)
+            if len(staged) == 2:
+                raise OSError('injected failure on the second file')
+        return replace(self, target)
+
+    Path.replace = failing_second_replace
+    try:
+        failed = TestClient(app, raise_server_exceptions=False).patch('/api/papers/' + pid, json={
+            'expected_revision': paper['revision'],
+            'data': {'source': document('New text. '), 'bibtex': '% New bibliography'}})
+    finally:
+        Path.replace = replace
+    assert failed.status_code == 500
+    assert len(staged) == 2
+    assert (stable / 'paper.tex').read_text() == old_source
+    assert (stable / 'references.bib').read_text() == old_bibtex
+    assert not list(stable.glob('*.forest-tmp'))
+    assert ok(client.get('/api/papers/' + pid))['revision'] == paper['revision']
+    for name, revision in revisions.items():
+        assert ok(client.get('/api/projects/' + pid + '/file', params={'path': 'paper/' + name}))['revision'] == revision
+
+
 def case_newer_generation_and_simultaneous_publication(client):
     pid = project(client)
     initial = publish(pid, enqueue_generation(pid), bundle(pid, 'initial', 'Initial. '))
