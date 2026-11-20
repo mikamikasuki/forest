@@ -249,7 +249,7 @@ def _run_worker_check():
     outputs = _render_studio_pdf(root, 'unbound_worker')
 
     with Session.begin() as session:
-        session.add(Project(id=pid, name='Worker provenance check', goal='Reject unbound manuscript figures'))
+        session.add(Project(id=pid, name='Worker provenance check', goal='Verify figure source-run provenance'))
         run = _completed_run(session, pid, root, 'r-selected', 780)
         session.add(SourcePaper(
             id='src-1',
