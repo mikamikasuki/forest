@@ -9,6 +9,8 @@ export const projectEvents = [
   "context_changed",
   "controller_changed",
   "cursor_reset",
+  "evaluation_protocol_revised",
+  "goal_contract_revised",
   "metric_available",
   "node_changed",
   "paper_changed",
