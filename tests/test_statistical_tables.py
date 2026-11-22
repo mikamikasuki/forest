@@ -45,7 +45,7 @@ def calculated_evidence(tmp_path, datasets=4, conditions=(None,)):
     (directory / 'metrics.json').write_text(json.dumps(data))
     return {'runs': [{'id': 'computed', 'directory': str(directory), 'metrics_file': 'metrics.json', 'metrics': data}],
             'metrics': metrics, 'sources': [], 'figures': [], 'claims': [],
-            'statistics': {'version': 1, 'records': records, 'comparisons': [], 'coverage': {'complete': True}}}
+            'statistics': {'version': 1, 'records': records, 'comparisons': [], 'coverage': {'complete': True, 'design_declared': True}}}
 
 
 def table_draft(evidence, spec=None):
