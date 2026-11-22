@@ -104,3 +104,17 @@ def test_unclosed_fence_keeps_following_heading_out_of_results():
     _, headings = markdown_headings('# Visible\n````\n# Hidden\n')
 
     assert [heading['name'] for heading in headings] == ['Visible [1]']
+
+
+def test_unicode_line_separator_is_not_a_markdown_line_end():
+    _, headings = markdown_headings('intro\u2028# Not a heading\n')
+
+    assert headings == []
+
+
+def test_form_feed_does_not_shift_markdown_heading_lines():
+    raw, headings = markdown_headings('# A\n\x0c\n## B\n')
+
+    section = next(heading for heading in headings if heading['name'] == 'A / B [1]')
+    assert (section['start_line'], section['end_line']) == (3, 3)
+    assert raw[section['start_byte']:section['end_byte']] == b'## B\n'
