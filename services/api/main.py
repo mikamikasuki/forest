@@ -601,12 +601,14 @@ def provider_retire(ident:str,body:dict=Body(default={} )):
                 if replacement: config['provider_id']=replacement.id
                 else: config.pop('provider_id',None)
                 project.config=config
+                # A client holding the earlier revision must not restore the retired provider.
+                project.revision+=1; emit(s,project.id,'project_changed',{'revision':project.revision})
         for node in s.scalars(select(Node)):
             config=dict(node.config or {})
             if config.get('provider_id')==ident:
                 if replacement: config['provider_id']=replacement.id
                 else: config.pop('provider_id',None)
-                node.config=config
+                node.config=config; node.revision+=1
         for agent in s.scalars(select(Agent).where(Agent.provider_id==ident)):
             agent.provider_id=replacement.id if replacement else None
         from services.observation.models import ReporterPolicy

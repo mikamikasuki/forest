@@ -929,6 +929,29 @@ def case_export_rejects_oversized_files_and_keeps_boundary_roundtrip(client, app
     assert (restored_root / "keep.txt").read_text() == "retained export file\n"
 
 
+def case_provider_retirement_advances_project_revision_and_rejects_stale_restore(client, app):
+    provider = ok(client.post('/api/providers', json={
+        'name': 'Retired provider', 'kind': 'openai',
+        'base_url': 'http://127.0.0.1:1/v1', 'model': 'test-model',
+    }))
+    project = ok(client.post('/api/projects', json={
+        'name': 'Provider-bound project', 'config': {'provider_id': provider['id']},
+    }))
+    node = add_node(client, project, config={'provider_id': provider['id']})
+    before = ok(client.get(f"/api/projects/{project['id']}"))
+    ok(client.post(f"/api/providers/{provider['id']}/retire", json={}))
+    after = ok(client.get(f"/api/projects/{project['id']}"))
+    assert 'provider_id' not in after['config']
+    assert after['revision'] > before['revision']
+    refreshed = next(item for item in graph(client, project)['nodes'] if item['id'] == node['id'])
+    assert 'provider_id' not in refreshed['config']
+    assert refreshed['revision'] > node['revision']
+    stale = client.patch(f"/api/projects/{project['id']}", json={
+        'expected_revision': before['revision'], 'config': {'provider_id': provider['id']}})
+    assert stale.status_code == 409
+    assert 'provider_id' not in ok(client.get(f"/api/projects/{project['id']}"))['config']
+
+
 def case_project_provider_roundtrip_requires_explicit_resolution_when_missing(client, app):
     provider = ok(client.post('/api/providers', json={
         'name': 'Project archive provider', 'kind': 'openai',
