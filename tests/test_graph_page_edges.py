@@ -56,32 +56,40 @@ if __name__ == '__main__':
         try:
             page = client.get('/api/projects/p/graph/page', params={'limit': 2}).json()
             assert [n['id'] for n in page['nodes']] == ['n000', 'n001']
-            expected = {'out', 'in', 'internal', 'self'}
-            page_edge_ids = [edge['id'] for edge in page['edges']]
-            assert len(page_edge_ids) == 4 and set(page_edge_ids) == expected
+            assert {e['id'] for e in page['edges']} == {'out', 'in', 'internal', 'self'}
+            assert len(page['edges']) == 4
             assert page['next_offset'] == 2
-            assert len(loaded) == 4 and set(loaded) == expected, f'unrelated edges loaded: {len(loaded)}'
+            assert set(loaded) == {'out', 'in', 'internal', 'self'} and len(loaded) == 4, f'unrelated edges loaded: {len(loaded)}'
+            assert loaded.count('internal') == 1  # both endpoints are on this page
 
             loaded.clear()
             filtered = client.get('/api/projects/p/graph/page', params={'branch_id': 'a', 'query': 'Node 001'}).json()
             assert [n['id'] for n in filtered['nodes']] == ['n001']
-            filtered_ids = [edge['id'] for edge in filtered['edges']]
-            assert len(filtered_ids) == 2 and set(filtered_ids) == {'internal', 'self'}
-            assert len(loaded) == 2 and set(loaded) == {'internal', 'self'}
+            assert {e['id'] for e in filtered['edges']} == {'internal', 'self'}
+            assert len(filtered['edges']) == 2
+            assert set(loaded) == {'internal', 'self'} and len(loaded) == 2
 
             loaded.clear()
             empty = client.get('/api/projects/p/graph/page', params={'offset': 999}).json()
             assert empty['nodes'] == [] and empty['edges'] == [] and empty['next_offset'] is None
             assert loaded == []
 
+            variable_limits = []
             def limit_sql_variables(connection, _record, _proxy):
                 connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+                variable_limits.append(connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER))
             event.listen(engine, 'checkout', limit_sql_variables)
             try:
+                loaded.clear()
                 full = client.get('/api/projects/p/graph/page', params={'limit': 500})
                 assert full.status_code == 200, full.text
                 assert len(full.json()['nodes']) == 500
-                assert len(full.json()['edges']) == 204
+                full_edge_ids = {edge['id'] for edge in full.json()['edges']}
+                expected_full_edge_ids = {'out', 'in', 'internal', 'self', *[f'u{i:03}' for i in range(200)]}
+                assert full_edge_ids == expected_full_edge_ids
+                assert len(full_edge_ids) == 204
+                assert set(loaded) == expected_full_edge_ids and len(loaded) == 204
+                assert variable_limits and set(variable_limits) == {999}
             finally:
                 event.remove(engine, 'checkout', limit_sql_variables)
         finally:
