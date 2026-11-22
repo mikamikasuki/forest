@@ -137,12 +137,29 @@ def write_working_source(paper):
         raise ValueError('Working manuscript writes require a database transaction')
     folder = safe_path(project_dir(paper.project_id), 'paper')
     folder.mkdir(parents=True, exist_ok=True)
+    files = []
     for name, value in (('paper.tex', paper.data.get('source', '')),
                         ('references.bib', paper.data.get('bibtex', ''))):
         path = safe_path(folder, name)
-        temporary = path.with_name(path.name + '.forest-tmp')
-        temporary.write_text(value, encoding='utf-8')
-        temporary.replace(path)
+        files.append((name, path, path.with_name(path.name + '.forest-tmp'), value))
+    # The two files are one publication: stage both, then swap them in, and put
+    # the earlier contents back if any step fails so changed bytes are never
+    # left behind an unchanged file revision.
+    previous = {path: path.read_bytes() if path.is_file() else None for _, path, _, _ in files}
+    try:
+        for _, _, temporary, value in files:
+            temporary.write_text(value, encoding='utf-8')
+        for _, path, temporary, _ in files:
+            temporary.replace(path)
+    except BaseException:
+        for _, path, temporary, _ in files:
+            temporary.unlink(missing_ok=True)
+            if previous[path] is None:
+                path.unlink(missing_ok=True)
+            elif not path.is_file() or path.read_bytes() != previous[path]:
+                path.write_bytes(previous[path])
+        raise
+    for name, _, _, _ in files:
         relative = 'paper/' + name
         revision = session.scalar(select(FileRevision).where(
             FileRevision.project_id == paper.project_id, FileRevision.path == relative
