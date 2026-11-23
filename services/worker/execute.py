@@ -892,7 +892,7 @@ def execute(run_id):
                 from research.paper.visual_review import review_placements
                 draft,placement_review=review_placements(client,evidence,draft,folder/'visual_placement_reviews')
             generated=generate_paper(None,folder,config.get('title'),config.get('template','article'),evidence=evidence,draft=draft,layout=config.get('layout'))
-        compiled=compile_paper(folder,repair_layout=True)
+        compiled=compile_paper(folder,repair_layout=True,evidence_root=output)
         if compiled['status']!='completed': raise RuntimeError(compiled.get('log','LaTeX compile failed'))
         with Session.begin() as s:
             data={'source':(folder/'paper.tex').read_text(),'bibtex':(folder/'references.bib').read_text(),'pdf_path':str((folder/'paper.pdf').relative_to(root)),'log':compiled['log'],'bindings':([{'run_id':r['id'],'path':str((Path(r['directory'])/r['metrics_file']).relative_to(root))} for r in evidence['runs']] if config.get('example')!='class_weight_calibration' else [{'run_id':selected[0].id,'path':str((source/'metrics.json').relative_to(root))}]),'numeric_bindings':generated['bindings'],'source_run_ids':[r.id for r in selected],'source_dir':str(folder.relative_to(root))}
@@ -912,7 +912,7 @@ def execute(run_id):
                 if fdir.exists():
                     s.add(Figure(project_id=pid,title={'comparison':'Main Results Comparison','calibration':'Calibration Reliability','method':'Method Architecture'}[fname],status='ready_for_review',data={'kind':'bar' if fname=='comparison' else fname,'run_ids':[selected[0].id],'metric':'brier','style':{},'outputs':{ext:str((fdir/f'figure.{ext}').relative_to(root)) for ext in ('svg','pdf','png') if (fdir/f'figure.{ext}').exists()},'code':(fdir/'plot.py').read_text() if (fdir/'plot.py').exists() else ''}))
             emit(s,pid,'compile_finished',{'paper_id':publication['paper_id'],'run_id':run_id,**publication})
-        return {'pdf_path':str((folder/'paper.pdf').relative_to(root)),'paper_source':str((folder/'paper.tex').relative_to(root)),'actual_compilation':True,**({'draft_reuse':reuse} if reuse is not None else {}),**publication}
+        return {**relative_paths(compiled['compile_evidence'],root.resolve()),**({'draft_reuse':reuse} if reuse is not None else {}),**publication}
     if kind=='paper_compile':
         from research.paper.manuscript import compile_paper
         from services.api.paper_state import locked_paper
@@ -923,7 +923,7 @@ def execute(run_id):
             if source!=output/'paper_inputs': raise ValueError('Layout inputs must belong to this compilation run')
             shutil.copytree(source,folder,dirs_exist_ok=True)
             plan=apply_layout(folder,config['layout'],config['template'])
-            compiled=compile_paper(folder)
+            compiled=compile_paper(folder,evidence_root=output)
             if compiled['status']!='completed': raise RuntimeError(compiled.get('log','LaTeX compile failed'))
             data={**config['paper_data'],'source':(folder/'paper.tex').read_text(),
                   'bibtex':(folder/'references.bib').read_text(),
@@ -935,8 +935,8 @@ def execute(run_id):
             with Session.begin() as s:
                 publication=publish_layout(s,pid,data,config,run_id)
                 emit(s,pid,'compile_finished',{'paper_id':publication['paper_id'],'run_id':run_id,**publication})
-            return {'pdf_path':data['pdf_path'],'paper_source':str((folder/'paper.tex').relative_to(root)),
-                    'actual_compilation':True,'layout_plan':plan,'layout_preflight':compiled.get('preflight'),**publication}
+            return {**relative_paths(compiled['compile_evidence'],root.resolve()),
+                    'layout_plan':plan,'layout_preflight':compiled.get('preflight'),**publication}
         if config.get('source_scope')=='workspace':
             from services.api.paper_state import publish_generation
             source=safe_path(root,config['compile_input_dir'],True); folder=output/('paper-'+uid())
@@ -944,7 +944,7 @@ def execute(run_id):
             shutil.copytree(source,folder,dirs_exist_ok=True)
             generated_names={'paper.pdf','paper.aux','paper.log','paper.bbl','paper.blg','paper.out','paper.synctex.gz'}
             submitted_files={str(path.relative_to(folder)):path.read_bytes() for path in folder.rglob('*') if path.is_file() and str(path.relative_to(folder)) not in generated_names}
-            compiled=compile_paper(folder)
+            compiled=compile_paper(folder,evidence_root=output)
             if compiled['status']!='completed': raise RuntimeError(compiled.get('log','LaTeX compile failed'))
             if any(not (folder/name).is_file() or (folder/name).read_bytes()!=content for name,content in submitted_files.items()):
                 raise ValueError('Manuscript inputs changed during compilation; compile the edited bundle again')
@@ -957,20 +957,21 @@ def execute(run_id):
             with Session.begin() as s:
                 publication=publish_generation(s,pid,config.get('title') or 'Agent manuscript',data,config.get('paper_snapshot'),run_id)
                 emit(s,pid,'compile_finished',{'paper_id':publication['paper_id'],'run_id':run_id,**publication})
-            return {'pdf_path':data['pdf_path'],'paper_source':str((folder/'paper.tex').relative_to(root)),
-                    'actual_compilation':True,'source_scope':'workspace','origin_agent_run_id':config['origin_agent_run_id'],
+            return {**relative_paths(compiled['compile_evidence'],root.resolve()),
+                    'source_scope':'workspace','origin_agent_run_id':config['origin_agent_run_id'],
                     'origin_source_path':config['origin_source_path'],**publication}
         folder=output/'paper'; source=root/'paper'
         if source.exists(): shutil.copytree(source,folder,dirs_exist_ok=True)
         else: folder.mkdir(exist_ok=True)
-        (folder/'paper.tex').write_text(config['source']); (folder/'references.bib').write_text(config.get('bibtex','')); compiled=compile_paper(folder)
+        (folder/'paper.tex').write_text(config['source']); (folder/'references.bib').write_text(config.get('bibtex',''))
+        compiled=compile_paper(folder,evidence_root=output)
         with Session.begin() as s:
             p=locked_paper(s,config['paper_id'])
             if p.revision==config['paper_revision']:
                 p.data={**p.data,'log':compiled['log'],'errors':compiled.get('errors',[]),'layout_preflight':compiled.get('preflight'),'compiled_revision':p.revision,'pdf_path':str((folder/'paper.pdf').relative_to(root)) if compiled.get('pdf_path') else None}; p.status='ready_for_review' if compiled['status']=='completed' else 'compile_failed'
             emit(s,pid,'compile_finished',{'paper_id':p.id,'status':compiled['status'],'run_id':run_id})
         if compiled['status']!='completed': raise RuntimeError(compiled['log'][-12000:])
-        return {'pdf_path':str((folder/'paper.pdf').relative_to(root)),'compiled_revision':config['paper_revision']}
+        return {**relative_paths(compiled['compile_evidence'],root.resolve()),'compiled_revision':config['paper_revision']}
     if kind=='literature':
         from research.literature.sources import search, import_identifier
         query=config.get('query') or config.get('instructions') or config.get('project_goal')

@@ -355,27 +355,30 @@ def assess_submission(root, profile=None, *, sources=(), runs=(), manifest=None)
     paper = manifest.get('manuscript', {})
     if not isinstance(paper,dict):paper={}
     try:
-        if not completed(paper.get('compile_run_id')) or run_by_id[paper['compile_run_id']]['kind'] not in ('paper_compile', 'paper_generate'):
+        from research.agents.artifacts import equal_files
+        compile_id=paper.get('compile_run_id')
+        run=run_by_id.get(compile_id,{})
+        if not completed(compile_id) or run.get('kind') not in ('paper_compile','paper_generate'):
             raise ValueError('No actual completed manuscript compilation run')
         source = _path(root, paper['source_path']); pdf = _path(root, paper['pdf_path'])
-        compiled_run=run_by_id[paper['compile_run_id']]
-        actual_pdf=compiled_run.get('metrics',{}).get('pdf_path')
-        actual_source=compiled_run.get('metrics',{}).get('paper_source')
-        if not actual_pdf or _path(root,actual_pdf)!=pdf:
-            raise ValueError('The manuscript PDF is not the artifact produced by the declared completed compilation')
-        if actual_source and _path(root,actual_source)!=source:
-            raise ValueError('The manuscript source does not match the declared completed compilation')
+        metrics=run.get('metrics',{})
+        originals=metrics.get('compile_originals',{})
+        run_root=_path(root,run['output_path'])
+        for key,path in (('paper_source',source),('pdf_path',pdf)):
+            if key not in originals or _path(root,metrics.get(key))!=path or not equal_files(path,_path(run_root,originals[key])):
+                raise ValueError('Recompile to verify the current manuscript source and PDF.')
         for rid,review,review_path in review_records:
             inspected=review.get('reviewed_run_ids',[])
-            required=measured_runs|set(analysis_ids)|{paper['compile_run_id']}
+            required=measured_runs|set(analysis_ids)|{compile_id}
             if not isinstance(inspected,list) or not required<=set(inspected):
                 gap('review_coverage','Independent review '+str(rid)+' must inspect every referenced experiment/analysis and the actual final compile run.','Submission Reviewer')
             latest_material=max([source.stat().st_mtime,pdf.stat().st_mtime,*[p.stat().st_mtime for p in raw_cache]])
             if review_path.stat().st_mtime<latest_material:
                 gap('stale_submission_review','Independent review '+str(rid)+' predates changed manuscript or measurement artifacts; review the current evidence.','Submission Reviewer')
         layout = _load(_path(root, paper['layout_report']))
-        if not source.is_file() or not pdf.read_bytes().startswith(b'%PDF'):
-            raise ValueError('Manuscript source/PDF is absent')
+        with pdf.open('rb') as stream:
+            if stream.read(4)!=b'%PDF':
+                raise ValueError('Invalid manuscript PDF')
         if layout.get('actual_compilation') is not True or layout.get('issues') or layout.get('status') != 'passed':
             raise ValueError('Compiled layout still needs inspection or repairs')
         from pypdf import PdfReader

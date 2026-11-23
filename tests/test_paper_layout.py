@@ -167,7 +167,8 @@ Queued large actual layout panels.
     if first['status']=='unavailable':pytest.skip('Actual TeX compiler required')
     assert first['status']=='completed'
     assert first['preflight']['visual_placements'][0]['page_distance']>1
-    repaired=compile_paper(tmp_path,repair_layout=True)
+    evidence_root = tmp_path / 'run'
+    repaired=compile_paper(tmp_path,repair_layout=True,evidence_root=evidence_root)
     assert repaired['status']=='completed'
     assert repaired['preflight']['visual_placements'][0]['page_distance']<=1
     assert repaired['layout_repair_attempts']==1
@@ -175,3 +176,6 @@ Queued large actual layout panels.
     current=(tmp_path/'paper.tex').read_text()
     assert current.count('FOREST placement repair before argument:target')==1
     assert source.count('\\caption')==current.count('\\caption')
+    evidence = repaired['compile_evidence']
+    for field in ('paper_source', 'pdf_path'):
+        assert (evidence_root / evidence['compile_originals'][field]).read_bytes() == Path(evidence[field]).read_bytes()
