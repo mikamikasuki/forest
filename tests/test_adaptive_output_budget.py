@@ -10,6 +10,18 @@ from research.agents.provider import ModelClient, ProviderError, parse_response
 from research.planning.model import context_model_json, _merge_complete_json
 
 
+def _recorded_chunks(saved):
+    recorded = []
+    for message in saved['messages']:
+        try:
+            value = json.loads(message.get('content', ''))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict) and value.get('status') == 'chunk_recorded':
+            recorded.append(value)
+    return recorded
+
+
 def test_stage_complexity_and_provider_capacity_allocate_distinct_budgets():
     config = {'adaptive_output_fallback_tokens': 400,
               'adaptive_output_budget': {'complexity': 'high'},
@@ -199,6 +211,117 @@ def test_managed_planner_splits_and_merges_only_complete_json_chunks(tmp_path):
     assert proposal == {'ideas': [{'id': 'a'}, {'id': 'b'}]}
     assert json.loads(aggregate['text']) == proposal
     assert provider.calls == 3
+    session = Path(aggregate['context_session_path'])
+    saved = json.loads((session / 'session.json').read_text())
+    recorded = _recorded_chunks(saved)
+    assert recorded[0]['missing_indices'] == [1]
+    assert recorded[0]['missing_count'] == 1
+    assert recorded[0]['missing_indices_truncated'] is False
+
+
+def _split_response(native, envelope, call_id):
+    arguments = {'result_json': json.dumps(envelope)}
+    if native:
+        function_call = {'type': 'function_call', 'name': 'submit_result',
+                         'arguments': json.dumps(arguments), 'call_id': call_id}
+        return {'text': '', 'tool_calls': [{'name': 'submit_result', 'arguments': arguments, 'call_id': call_id}],
+                'output': [function_call], 'model': 'offline-split',
+                'usage': {'input_tokens': 1, 'output_tokens': 1, 'cost': None}, 'elapsed': 0}
+    return {'text': json.dumps({'tool': 'submit_result', 'arguments': arguments}),
+            'tool_calls': [], 'output': [], 'model': 'offline-split',
+            'usage': {'input_tokens': 1, 'output_tokens': 1, 'cost': None}, 'elapsed': 0}
+
+
+class _BoundedSplitProvider:
+    api = 'responses'
+    config = {}
+
+    def __init__(self, native, actions):
+        self.native_tools = native
+        self.actions = list(actions)
+        self.calls = 0
+
+    def complete(self, messages, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise ProviderError('offline output truncation', code='incomplete_response',
+                                incomplete_reason='max_output_tokens', request_id='direct-truncation')
+        action = self.actions[self.calls - 2]
+        if isinstance(action, BaseException):
+            raise action
+        return _split_response(self.native_tools, action, f'chunk-call-{self.calls}')
+
+
+@pytest.mark.parametrize('native', [False, True])
+def test_output_split_accepts_two_to_max_chunks_and_merges_out_of_order(tmp_path, native):
+    actions = [
+        {'_forest_chunk': {'index': index, 'total': 64}, 'content': {'parts': [index]}}
+        for index in [1, 0, *range(2, 64)]
+    ]
+    provider = _BoundedSplitProvider(native, actions)
+    proposal, aggregate = context_model_json(
+        provider,
+        [{'role': 'system', 'content': 'Return JSON.'}, {'role': 'user', 'content': 'Return split JSON.'}],
+        tmp_path / ('native' if native else 'json'),
+    )
+    assert proposal == {'parts': list(range(64))}
+    session = Path(aggregate['context_session_path'])
+    saved = json.loads((session / 'session.json').read_text())
+    assert saved['output_split_recovery']['assembled'] is True
+    assert saved['output_split_recovery']['merged_indices'] == list(range(64))
+
+
+@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('total', [65, 500000])
+def test_output_split_rejects_oversized_total_before_range_or_state_mutation(tmp_path, monkeypatch, native, total):
+    original_range = context_model_json.__globals__.get('range', range)
+
+    def guarded_range(stop, *args):
+        if isinstance(stop, int) and stop > 64:
+            raise AssertionError('oversized chunk total reached enumeration')
+        return original_range(stop, *args)
+
+    monkeypatch.setitem(context_model_json.__globals__, 'range', guarded_range)
+    invalid = {'_forest_chunk': {'index': 0, 'total': total}, 'content': {'parts': [0]}}
+    provider = _BoundedSplitProvider(native, [invalid, invalid, invalid])
+    with pytest.raises(ValueError, match='Planner repeatedly') as caught:
+        context_model_json(
+            provider,
+            [{'role': 'system', 'content': 'Return JSON.'}, {'role': 'user', 'content': 'Return split JSON.'}],
+            tmp_path / ('native' if native else 'json'),
+        )
+    assert 'total from 2 to 64' in str(caught.value.__cause__)
+    session = next((tmp_path / ('native' if native else 'json') / 'context_sessions').iterdir())
+    saved = json.loads((session / 'session.json').read_text())
+    assert saved['output_split_recovery']['total'] is None
+    assert saved['output_split_recovery']['received'] == {}
+    assert saved['output_split_recovery']['pending'] is True
+
+
+@pytest.mark.parametrize('native', [False, True])
+def test_bad_changed_total_does_not_corrupt_existing_output_assembly(tmp_path, native):
+    valid = {'_forest_chunk': {'index': 0, 'total': 64}, 'content': {'parts': [0]}}
+    invalid = {'_forest_chunk': {'index': 1, 'total': 65}, 'content': {'parts': [1]}}
+    provider = _BoundedSplitProvider(native, [
+        valid, invalid, invalid, invalid,
+    ])
+    with pytest.raises(ValueError, match='Planner repeatedly') as caught:
+        context_model_json(
+            provider,
+            [{'role': 'system', 'content': 'Return JSON.'}, {'role': 'user', 'content': 'Return split JSON.'}],
+            tmp_path / ('native' if native else 'json'),
+        )
+    assert 'total from 2 to 64' in str(caught.value.__cause__)
+    session = next((tmp_path / ('native' if native else 'json') / 'context_sessions').iterdir())
+    saved = json.loads((session / 'session.json').read_text())
+    split = saved['output_split_recovery']
+    assert split['total'] == 64
+    assert split['received'] == {'0': {'parts': [0]}}
+    recorded = _recorded_chunks(saved)
+    assert recorded[-1]['missing_indices'] == list(range(1, 17))
+    assert recorded[-1]['missing_count'] == 63
+    assert recorded[-1]['missing_indices_truncated'] is True
+    assert recorded[-1]['next_required_index'] == 1
 
 
 def test_truncated_direct_paper_response_restarts_as_audited_json_chunks(tmp_path):
