@@ -55,8 +55,8 @@ def validate_statistical_data(data):
                 raise ValueError('Statistical plot value does not match its analysis binding: ' + str(identifier) + '/' + field)
             identity = bindings[reference].get('statistical_identity')
             if isinstance(identity, dict):
-                for name in ('dataset', 'method', 'metric', 'condition', 'x', 'baseline', 'candidate'):
-                    if name in identity and identity[name] != record.get(name):
+                for name, expected in identity.items():
+                    if expected != record.get(name):
                         raise ValueError('Statistical plot identity differs from its source binding: ' + name)
         if record.get('ci_low') is not None and record.get('ci_high') is not None and record['ci_low'] > record['ci_high']:
             raise ValueError('Statistical interval endpoints are reversed')

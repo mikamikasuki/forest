@@ -916,11 +916,10 @@ def _numeric_leaves(value, pointer=''):
 
 
 def attach_statistical_evidence(bundle):
-    """Add results and provenance-bound derived metrics atomically, in place.
+    """Attach results and derived metrics atomically and idempotently in place.
 
-    Derived pointers address the saved statistical_results artifact itself, not
-    the original run's metrics file. Reattachment is idempotent. Every original
-    numeric measurement must already have a run-scoped metric ID in the bundle.
+    Derived pointers address the saved statistical_results artifact.
+    Original measurements need run-scoped metric IDs in the bundle.
     """
     result = build_statistical_results(bundle.get('runs', []))
     if not result['recognized']:
@@ -977,7 +976,8 @@ def attach_statistical_evidence(bundle):
         metric['precision'] = 0 if integer_display else precision
         metric['format'] = '.0f' if integer_display else f'.{precision}g'
         if row:
-            metric['statistical_identity'] = {key: row.get(key) for key in ('dataset', 'method', 'metric', 'condition', 'x', 'baseline', 'candidate')}
+            metric['statistical_identity'] = {key: row.get(key) for key in (
+                'dataset', 'method', 'metric', 'condition', 'x', 'baseline', 'candidate', 'unit', 'direction')}
         derived.append(metric)
         numeric_index[pointer] = identifier
     for collection in ('records', 'comparisons'):

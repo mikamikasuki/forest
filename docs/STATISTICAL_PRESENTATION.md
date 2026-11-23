@@ -90,6 +90,8 @@ Tables use grouped dataset/metric headers, explicit direction and units, consist
 
 Curves retain all actual checkpoints, methods and uncertainty endpoints. Confidence bands are pointwise unless a simultaneous procedure is explicitly supplied. A single checkpoint is rendered as points with intervals. Paired-effect panels include a zero reference; comparison matrices preserve the full selected dataset/method scope. Large facet grids are paginated at readable size rather than reduced to tiny text.
 
+New plot bindings record each metric's unit and optimization direction alongside its numeric values. Plotting verifies the recorded metadata before rendering. Older saved figures can still be opened. Regenerate their data from the original runs to attach the unit and direction bindings.
+
 Explanations state what the comparison establishes, under which condition and with what practical value. Source-supported qualifications stay precise. Captions do not narrate the analysis process, invent a mechanism or turn a local result into an aggregate claim. Measured statements use the same numeric references as their tables.
 
 ### Calibration curves
