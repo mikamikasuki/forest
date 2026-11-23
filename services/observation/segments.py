@@ -19,7 +19,7 @@ def index(content: bytes, path: str):
         text = content.decode('utf-8')
     except UnicodeDecodeError:
         return [], 'binary'
-    lines = text.splitlines(keepends=True)
+    lines = re.findall(r'[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+', text)  # LF, CRLF and CR only, like ast and CommonMark
     starts = [0]
     for line in lines:
         starts.append(starts[-1] + len(line.encode('utf-8')))
