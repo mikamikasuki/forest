@@ -55,7 +55,7 @@ def matches_publication(incoming: dict, existing_data: dict, existing_title: str
 
 
 def _bib_escape(value):
-    return str(value or "").replace("\\", "\\textbackslash{}").replace("&", r"\&").replace("%", r"\%").replace("_", r"\_").replace("#", r"\#").replace("{", "").replace("}", "")
+    return str(value or "").replace("{", "").replace("}", "").replace("\\", "\\textbackslash{}").replace("&", r"\&").replace("%", r"\%").replace("_", r"\_").replace("#", r"\#")
 
 
 def _author_names(value):
