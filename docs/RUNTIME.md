@@ -32,7 +32,7 @@ The impact analyzer follows declared dependencies and explicit input references.
 
 ## Research decisions and manuscript production
 
-Research analysis records a best estimate, uncertainty, contrary evidence and the experiment that would change the decision. Experiment protocols identify the comparison, statistical unit, selection procedure and argumentative duty. Saved predictions support independent numerical checks. Reviewer contexts can omit earlier judgment summaries while retaining primary evidence.
+Research analysis records a best estimate, uncertainty, contrary evidence and the experiment that would change the decision. If the analysis provider changes while a draft is open, choose **Use current context** to submit with the new provider. After an uncertain submission, **Retry with previous provider** sends the original request with its saved identity. Either choice keeps your current question and literature settings. Experiment protocols identify the comparison, statistical unit, selection procedure and argumentative duty. Saved predictions support independent numerical checks. Reviewer contexts can omit earlier judgment summaries while retaining primary evidence.
 
 Manuscript generation reads selected completed-run artifacts. Bound values resolve to saved measurements; cited records and declared critical contrary references are checked before rendering. Unbound numeric prose is flagged for review. Paper layout jobs preserve editable source and publish compiled output against its source revision. See [the evidence workflow](EVIDENCE_WORKFLOW.md) and [paper authoring](PAPER_AUTHORING.md) for the full contracts.
 
