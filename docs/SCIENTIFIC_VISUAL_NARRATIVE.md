@@ -24,8 +24,8 @@ hierarchy; their results do not establish the current method's claims.
 `research.figures.narrative.story_design_request(context, mode)` builds the
 evidence-bound storyboard request. The workflow makes an actual provider call
 and validates its JSON with `validate_storyboard`. Assertions declare their status
-and actual source identities;
-measured numeric statements bind `[[metric:ID]]` to supplied finite observations.
+and actual source identities. Measured numeric statements, including values written
+in scientific notation, bind `[[metric:ID]]` to supplied finite observations.
 The structural validator does not certify scientific entailment.
 
 Native `method` data contains `storyboard`, `story_context`, its complete

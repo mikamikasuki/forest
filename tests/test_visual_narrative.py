@@ -87,6 +87,22 @@ def test_real_measurements_bind_story_and_generic_directory_is_rejected():
         evidence_catalog(broken)
 
 
+@pytest.mark.parametrize(('literal', 'visible_only'), [
+    ('1e6', False),
+    ('-2E6', True),
+])
+def test_story_image_prompt_rejects_unbound_scientific_notation(literal, visible_only):
+    context, story = actual_story()
+    claim = f'The observed paired difference is {literal}.'
+    if visible_only:
+        story['display']['consequence'] = claim
+    else:
+        story['consequence']['text'] = claim
+
+    with pytest.raises(ValueError, match='bind measured numeric'):
+        story_image_prompt(story, context)
+
+
 def test_baseline_failure_and_unmeasured_expectation_cannot_be_disguised():
     context, story = actual_story()
     broken = deepcopy(story)
