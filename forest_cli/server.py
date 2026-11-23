@@ -89,6 +89,8 @@ def serve(*, host="127.0.0.1", port=8000, data_dir=None, database_url=None, head
 
     try:
         _prepare_web(headless=headless, dev=dev, env=env)
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, stop)
         # Importing the CLI/help must never create a database. Initialization is
         # confined to an explicit serve invocation in a separate interpreter.
         subprocess.run([sys.executable, "-m", "services.api.db"], cwd=ROOT, env=env, check=True)
@@ -98,8 +100,6 @@ def serve(*, host="127.0.0.1", port=8000, data_dir=None, database_url=None, head
         ]
         if dev:
             commands.append((["npm", "run", "dev", "--", "--host", host], ROOT / "apps" / "web"))
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            previous_handlers[signum] = signal.signal(signum, stop)
         for command, cwd in commands:
             children.append(subprocess.Popen(command, cwd=cwd, env=env))
         endpoint_host = f"[{host}]" if ":" in host else host
