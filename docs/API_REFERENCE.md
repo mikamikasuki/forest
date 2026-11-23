@@ -1102,7 +1102,7 @@ Success `200`: `application/x-bibtex`: `string`.
 
 #### `POST /api/library/import`
 
-Require project_id and either identifier or paper. identifier may be DOI/arXiv/public PDF; paper may be one metadata object or a list. Save source records and extracted passages, deduplicate DOI/title. A single record returns RecordItem; multiple records return {records:[...]}. Source metadata remains extensible.
+Supply project_id and an identifier (DOI/arXiv/public PDF) or paper metadata as an object or list. Save records and passages. Within a project, a matching publication reuses its saved record during concurrent imports. Returns one RecordItem or {records:[...]}. Source metadata remains extensible.
 
 Body: `application/json`: `LibraryImportRequest`; required.
 
