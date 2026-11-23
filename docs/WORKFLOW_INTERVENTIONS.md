@@ -117,7 +117,11 @@ Goal. The purposes impose additional conditions:
 | `exploratory` | No scientific acceptance claim. |
 | `raw_data` | Explicit `artifact_paths` with source-bound `data_contract` checks for schema, units, sample identity and declared split. |
 | `comparison` | Complete independently recomputed numerical coverage and matching declared comparison conditions. |
-| `major_claim` | Comparison conditions plus distinct completed `research_phase: "confirmation"` runs, independently checked and current for the Goal. |
+| `major_claim` | Comparison conditions plus distinct completed `research_phase: "confirmation"` runs with independent held-out evaluation, independent checks and current Goal applicability. |
+
+Feedback-linked and unclassified older evaluations can still serve in comparisons.
+For a major-claim handoff, run and independently verify a distinct confirmation
+with an evaluation classified as `independent_confirmation` and free of feedback.
 
 For example, configure a downstream comparison with actual source run IDs:
 

@@ -163,6 +163,16 @@ def comparison_declaration(run, objective=None):
             'scope': 'Declared dataset/version, split, evaluation, metric, statistical unit and comparison budget; not independent scientific validation'}
 
 
+def evaluation_classification(runs):
+    """Classify the supplied runs, with feedback taking precedence."""
+    contexts = [(run.get('config') or {}).get('evaluation_context') or {} for run in runs]
+    if any(context.get('classification') == 'adaptive' or context.get('feedback_run_ids') for context in contexts):
+        return 'adaptive'
+    if contexts and all(context.get('classification') == 'independent_confirmation' for context in contexts):
+        return 'independent_confirmation'
+    return 'exploratory'
+
+
 def assess_comparability(runs, objective=None):
     """Compare actual selected runs without treating omissions as equal."""
     if not isinstance(runs, list) or not runs:
@@ -184,9 +194,7 @@ def assess_comparability(runs, objective=None):
         status, reason = 'unverified', 'A measured comparison requires at least two distinct completed runs'
     else:
         status, reason = 'directly_comparable', 'Complete declared scientific comparison scopes agree'
-    classification='adaptive' if any((run.get('config') or {}).get('evaluation_context',{}).get('classification')=='adaptive' or
-        (run.get('config') or {}).get('evaluation_context',{}).get('feedback_run_ids') for run in runs) else 'exploratory' if any(
-        (run.get('config') or {}).get('evaluation_context',{}).get('classification')!='independent_confirmation' for run in runs) else 'independent_confirmation'
+    classification = evaluation_classification(runs)
     return {'directly_comparable': status == 'directly_comparable', 'evaluation_classification':classification,
             'held_out_confirmation_eligible':classification=='independent_confirmation',
             'independent_held_out_confirmation':classification=='independent_confirmation' and status=='directly_comparable' and all(

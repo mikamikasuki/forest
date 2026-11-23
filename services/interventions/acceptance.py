@@ -34,7 +34,7 @@ def acceptance_contract(config):
 def acceptance_gate(session, run, sources):
     from services.api.verification import verification_for_run, numerical_coverage_for_run
     from .applicability import goal_applicability
-    from research.validation.comparability import assess_comparability
+    from research.validation.comparability import assess_comparability, evaluation_classification
     from services.api.db import asdict
     contract = acceptance_contract(run.config)
     if contract is None or contract.purpose == 'exploratory':
@@ -72,12 +72,15 @@ def acceptance_gate(session, run, sources):
             numerical = numerical_coverage_for_run(session, source)
             applicable = goal_applicability(session, source)
             phase = source.config.get('research_phase')
-            compatible = assess_comparability([asdict(sources[0]), asdict(source)],
+            confirmation = asdict(source)
+            compatible = assess_comparability([asdict(sources[0]), confirmation],
                 {'comparison_fields': contract.comparison_fields}) if sources and source.id != sources[0].id else None
             if (source.id in {item.id for item in sources} or source.status != 'completed' or phase != 'confirmation'
                     or observed['verification_status'] != 'accepted' or not numerical['ready'] or not applicable['ready']
                     or compatible is None or not compatible['directly_comparable']):
                 failures.append('A distinct actual, independently checked confirmation-phase run is required: '+identifier)
+            elif evaluation_classification([confirmation]) != 'independent_confirmation':
+                failures.append('Confirmation requires an independent held-out evaluation without feedback: '+identifier)
             confirmations.append({'run_id': identifier, 'research_phase': phase,
                 'verification_status': observed['verification_status'], 'numerical_coverage': numerical,
                 'comparison': compatible, 'goal_applicability': applicable})
