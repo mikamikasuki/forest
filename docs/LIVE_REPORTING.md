@@ -68,8 +68,9 @@ current artifact.
 Each reconciliation pass processes at most 200 entries and 2 MiB of content.
 Current retained content is limited to 256 KiB per file and 32 MiB per project;
 metadata is limited to 8 KiB per file. Inventories allow 100,000 file rows,
-including deletion tombstones, and 2,048 pending directories per scope. Capacity
-or permission failures are partial coverage, never an empty or complete scan.
+including deletion tombstones. A scope resumes its depth-first scan using a
+stack of up to 2,048 saved directory cursors, so wide folders continue across
+passes. Capacity or permission failures leave the scan partial.
 CSV prefix reads are 32 KiB; Parquet footer and image-header reads are 256 KiB.
 Remote pages allow 200 entries, 32 KiB per text file and 512 KiB total text.
 Hidden paths, dependency caches, credentials, private keys and agent-session
