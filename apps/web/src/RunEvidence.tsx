@@ -275,6 +275,7 @@ export function RunEvidence({ runId }: { runId: string }) {
                     )}
                     <ApplicabilityReview
                       key={run.id}
+                      projectId={lineage.project_id}
                       runId={run.id}
                       completed={run.status === "completed"}
                     />
