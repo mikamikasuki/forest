@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -32,6 +33,49 @@ def test_host_cpu_includes_a_busy_child(tmp_path):
         import os, signal
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform not in ('linux', 'darwin'), reason='requires reaped child CPU counters')
+def test_host_cpu_keeps_a_child_after_its_parent_waits(tmp_path):
+    receipt = tmp_path / 'reaped.json'
+    child = '''
+import time
+start = time.process_time()
+while time.process_time() - start < 0.55:
+    sum(i * i for i in range(10000))
+'''
+    parent = '''
+import json, pathlib, resource, subprocess, sys
+subprocess.run([sys.executable, '-c', sys.argv[2]], check=True)
+usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+receipt = pathlib.Path(sys.argv[1])
+pending = receipt.with_suffix('.tmp')
+pending.write_text(json.dumps(usage.ru_utime + usage.ru_stime))
+pending.replace(receipt)
+input()
+'''
+    process = subprocess.Popen(
+        [sys.executable, '-c', parent, str(receipt), child],
+        stdin=subprocess.PIPE, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not receipt.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert receipt.exists(), 'parent did not finish waiting for its child'
+        expected_child_cpu = json.loads(receipt.read_text())
+        assert expected_child_cpu >= .5
+
+        resources = process_tree_resources(process.pid)
+        assert resources['observed_host_processes'] == 1
+        assert expected_child_cpu - .05 <= resources['cpu_seconds'] < expected_child_cpu + .25
+        assert resources['host_process_cpu_seconds'] == resources['cpu_seconds']
+        assert resources['reaped_child_cpu_available'] is True
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+        process.stdin.close()
 
 
 @pytest.mark.skipif(not hasattr(os, 'fork'), reason='requires POSIX process groups')

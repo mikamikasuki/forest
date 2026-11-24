@@ -1,7 +1,10 @@
 """Actual local process control with process identity and bounded log reads."""
+import ctypes
+from functools import lru_cache
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -78,6 +81,58 @@ def run_command(command, cwd, timeout=None, env=None, output_path=None, tail_byt
             'output_truncated': target.stat().st_size > tail_bytes, 'elapsed': time.monotonic() - start}
 
 
+class _DarwinRusageV1(ctypes.Structure):
+    _fields_ = [
+        ('uuid', ctypes.c_uint8 * 16),
+        ('user_time', ctypes.c_uint64),
+        ('system_time', ctypes.c_uint64),
+        ('other_process_counters', ctypes.c_uint64 * 8),
+        ('child_user_time', ctypes.c_uint64),
+        ('child_system_time', ctypes.c_uint64),
+        ('other_child_counters', ctypes.c_uint64 * 4),
+    ]
+
+
+class _MachTimebase(ctypes.Structure):
+    _fields_ = [('numer', ctypes.c_uint32), ('denom', ctypes.c_uint32)]
+
+
+@lru_cache(maxsize=1)
+def _darwin_cpu_reader():
+    system = ctypes.CDLL(None)
+    timebase = _MachTimebase()
+    timebase_info = system.mach_timebase_info
+    timebase_info.argtypes = [ctypes.POINTER(_MachTimebase)]
+    timebase_info.restype = ctypes.c_int
+    if timebase_info(ctypes.byref(timebase)) != 0:
+        return None
+    rusage = system.proc_pid_rusage
+    rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.POINTER(_DarwinRusageV1)]
+    rusage.restype = ctypes.c_int
+    return rusage, timebase.numer / timebase.denom / 1_000_000_000
+
+
+def _process_cpu_seconds(process):
+    if sys.platform == 'darwin':
+        reader = _darwin_cpu_reader()
+        if reader is not None:
+            rusage, seconds_per_tick = reader
+            counters = _DarwinRusageV1()
+            # RUSAGE_INFO_V1 adds the waiting process's reaped child counters.
+            if rusage(process.pid, 1, ctypes.byref(counters)) == 0:
+                ticks = (counters.user_time + counters.system_time + counters.child_user_time
+                         + counters.child_system_time)
+                return ticks * seconds_per_tick, True
+        counters = process.cpu_times()
+        return counters.user + counters.system, False
+
+    counters = process.cpu_times()
+    children_user = getattr(counters, 'children_user', None)
+    children_system = getattr(counters, 'children_system', None)
+    seconds = counters.user + counters.system + (children_user or 0) + (children_system or 0)
+    return seconds, children_user is not None and children_system is not None
+
+
 def process_tree_resources(pid, created=None):
     """Observed host CPU/RSS, including live descendants and reaped children.
 
@@ -89,15 +144,22 @@ def process_tree_resources(pid, created=None):
         raise psutil.NoSuchProcess(pid)
     processes = [parent, *parent.children(recursive=True)]
     cpu_seconds, rss_bytes, measured = 0.0, 0, 0
+    reaped_child_cpu_available = True
     for process in processes:
         try:
-            counters = process.cpu_times()
-            # children_* account for work already reaped by this process;
-            # live descendants are represented separately in the traversal.
-            cpu_seconds += sum(float(getattr(counters, field, 0)) for field in ('user', 'system', 'children_user', 'children_system'))
+            seconds, includes_reaped = _process_cpu_seconds(process)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            reaped_child_cpu_available = False
+            continue
+        # Reaped children are in the waiting process's counters; live
+        # descendants are represented separately in the traversal.
+        cpu_seconds += seconds
+        reaped_child_cpu_available &= includes_reaped
+        try:
             rss_bytes += process.memory_info().rss
             measured += 1
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return {'cpu_seconds': cpu_seconds, 'host_process_cpu_seconds': cpu_seconds,
-            'rss_bytes': rss_bytes, 'observed_host_processes': measured}
+            'rss_bytes': rss_bytes, 'observed_host_processes': measured,
+            'reaped_child_cpu_available': reaped_child_cpu_available}
