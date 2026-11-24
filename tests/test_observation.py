@@ -30,6 +30,15 @@ def test_byte_locations(path,text,expected,state):
     assert selected['start_line']>=1
 
 
+def test_python_symbol_ranges_ignore_form_feed_as_line_break():
+    raw=b'def a():\n    pass\n\x0c\ndef b():\n    pass\n'
+    segments,state=index(raw,'x.py')
+    assert state=='parsed'
+    symbol=next(s for s in segments if s['name']=='b')
+    assert raw[symbol['start_byte']:symbol['end_byte']]==b'def b():\n    pass'
+    assert (symbol['start_line'],symbol['end_line'])==(4,5)
+
+
 def scenario():
     import time
     from concurrent.futures import ThreadPoolExecutor

@@ -102,6 +102,26 @@ def test_articles_and_legacy_records_keep_existing_export_fields(publication_typ
     assert exported.fields["pages"] == "4-9"
 
 
+def test_bibtex_export_keeps_the_braces_of_an_escaped_backslash():
+    exported = sources.bibtex([{
+        "title": r"Stable laws: the \alpha-stable case",
+        "authors": [r"Ann \Bee"],
+        "year": 2024,
+    }])
+
+    assert r"title = {Stable laws: the \textbackslash{}alpha-stable case}" in exported
+    assert r"author = {Ann \textbackslash{}Bee}" in exported
+
+
+def test_bibtex_export_still_drops_braces_and_escapes_special_characters():
+    exported = sources.bibtex([{
+        "title": "{Braced} a_b & 50% #1", "authors": ["Alex Author"], "year": 2024,
+    }])
+
+    assert r"title = {Braced a\_b \& 50\% \#1}" in exported
+    assert "textbackslash" not in exported
+
+
 @pytest.mark.parametrize(("text", "format"), [
     (
         "@book{handbook, title={A Handbook}, editor={Editor, Casey}, "

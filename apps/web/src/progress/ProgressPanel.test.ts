@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { narrativeDraftAfterSettingsLoad } from "./ProgressPanel";
+import { narrativeDraftAfterSettingsLoad, narrativeSettingsDiffer } from "./ProgressPanel";
 import type { SettingsView } from "./types";
 
 const saved = {
@@ -11,17 +11,22 @@ const saved = {
 } as SettingsView["settings"];
 
 describe("narrative settings draft hydration", () => {
-  it("fills an empty draft when settings load while the panel is already open", () => {
-    expect(narrativeDraftAfterSettingsLoad(saved, null, true)).toBe(saved);
+  it("fills an empty draft from loaded settings", () => {
+    expect(narrativeDraftAfterSettingsLoad(saved, null, false)).toBe(saved);
   });
 
-  it("preserves edits made after the saved settings have loaded", () => {
+  it("preserves changed draft values when settings refresh after the panel closes", () => {
     const edited = { ...saved, enabled: false };
     expect(narrativeDraftAfterSettingsLoad(saved, edited, true)).toBe(edited);
   });
 
-  it("refreshes the draft from saved settings when the panel is closed", () => {
-    const edited = { ...saved, enabled: false };
-    expect(narrativeDraftAfterSettingsLoad(saved, edited, false)).toBe(saved);
+  it("refreshes an unchanged draft from newly saved settings", () => {
+    const refreshed = { ...saved, cap_usd: 2 };
+    expect(narrativeDraftAfterSettingsLoad(refreshed, { ...refreshed }, false)).toBe(refreshed);
+  });
+
+  it("tracks whether the draft differs from the last saved settings", () => {
+    expect(narrativeSettingsDiffer({ ...saved, cap_usd: 2 }, saved)).toBe(true);
+    expect(narrativeSettingsDiffer({ ...saved }, saved)).toBe(false);
   });
 });

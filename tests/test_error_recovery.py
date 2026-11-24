@@ -1,6 +1,14 @@
 import json
+import os
+import subprocess
+import sys
 
-from research.agents.error_recovery import classify_failure, diagnosis_prompt, observe_tool_result
+from research.agents.error_recovery import (
+    classify_failure,
+    diagnosis_prompt,
+    observe_tool_result,
+    rejected_action,
+)
 
 
 def test_failure_classification_separates_permissions_environment_model_experiment_and_budget():
@@ -39,6 +47,80 @@ def test_diagnostic_reads_do_not_erase_repeated_failed_operation():
     assert action == 'continue' and event['state'] == 'diagnosis_observed'
     repeat, action = observe_tool_result(state, 'run_command', failure, 4)
     assert repeat['repeat_count'] == 3 and action == 'block'
+
+
+def _environment_error_after_diagnosis():
+    state = {}
+    arguments = {'command': 'python -c "import optional_dependency"'}
+    failure = {'error': "ModuleNotFoundError: No module named 'optional_dependency'", 'exit_code': 1}
+    observe_tool_result(state, 'python', failure, 1, arguments=arguments)
+    _, action = observe_tool_result(state, 'python', failure, 2, arguments=arguments)
+    assert action == 'diagnose'
+    return state, arguments, failure
+
+
+def test_successful_environment_diagnosis_allows_the_same_operation_to_retry(tmp_path):
+    state = {}
+    command = [sys.executable, '-c', 'import forest_recovery_dependency_430']
+    arguments = {'code': 'import forest_recovery_dependency_430'}
+    environment = {**os.environ, 'PYTHONPATH': str(tmp_path / 'before-repair')}
+
+    first = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+    assert first.returncode != 0
+    failure = {'error': first.stderr, 'exit_code': first.returncode}
+    observe_tool_result(state, 'python', failure, 1, arguments=arguments)
+    _, action = observe_tool_result(state, 'python', failure, 2, arguments=arguments)
+    assert action == 'diagnose'
+    assert rejected_action(state, 'python', arguments)['repetition_prevented'] is True
+
+    dependency = tmp_path / 'forest_recovery_dependency_430.py'
+    dependency.write_text("VALUE = 'available'\n", encoding='utf-8')
+    repaired_environment = {**environment, 'PYTHONPATH': str(tmp_path)}
+    diagnosis = subprocess.run(
+        [sys.executable, '-c', 'import forest_recovery_dependency_430'],
+        env=repaired_environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert diagnosis.returncode == 0
+    event, action = observe_tool_result(
+        state, 'python', {'stdout': diagnosis.stdout, 'exit_code': diagnosis.returncode}, 3,
+        arguments={'code': 'import forest_recovery_dependency_430; print("diagnosis")'},
+    )
+    assert action == 'continue' and event['retry_unblocked'] is True
+    assert rejected_action(state, 'python', arguments) is None
+
+    retry = subprocess.run(command, env=repaired_environment, capture_output=True, text=True, check=False)
+    assert retry.returncode == 0
+    event, action = observe_tool_result(
+        state, 'python', {'stdout': retry.stdout, 'exit_code': retry.returncode}, 4,
+        arguments=arguments,
+    )
+    assert event is None and action == 'continue'
+    assert rejected_action(state, 'python', arguments) is None
+
+
+def test_environment_operation_is_blocked_if_its_post_diagnosis_retry_still_fails():
+    state, arguments, failure = _environment_error_after_diagnosis()
+    observe_tool_result(
+        state, 'read_file', {'content': 'dependency still missing', 'exit_code': 0}, 3
+    )
+
+    event, action = observe_tool_result(state, 'python', failure, 4, arguments=arguments)
+    assert event['action_failures'] == 3 and action == 'block'
+    assert rejected_action(state, 'python', arguments)['repetition_prevented'] is True
+
+
+def test_persisted_pending_environment_diagnosis_can_resume_after_upgrade():
+    state, arguments, _ = _environment_error_after_diagnosis()
+    state['error_recovery'].pop('diagnosis_operation')
+
+    event, action = observe_tool_result(
+        state, 'read_file', {'content': 'dependency is available', 'exit_code': 0}, 3
+    )
+    assert action == 'continue' and event['retry_unblocked'] is True
+    assert rejected_action(state, 'python', arguments) is None
 
 
 def test_budget_filename_does_not_masquerade_as_resource_exhaustion():

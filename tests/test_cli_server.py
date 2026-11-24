@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import plistlib
+import select
 import signal
 import subprocess
 import sys
@@ -144,6 +145,47 @@ def test_headless_launches_only_api_and_worker_and_cleans_up(supervised, monkeyp
     assert all(options["env"]["FOREST_DATABASE_URL"] == "sqlite:///" + str(data / "forest.db") for _, options in supervised.run + supervised.spawn)
     assert all(child.terminated and child.waited == [10] for child in supervised.children)
     assert supervised.signals[-2:] == [(signal.SIGINT, signal.SIG_DFL), (signal.SIGTERM, signal.SIG_DFL)]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="forest serve requires POSIX services")
+def test_sigterm_stops_the_database_initializer(tmp_path):
+    supervisor = '''
+import subprocess
+import sys
+
+from forest_cli import server
+
+run = subprocess.run
+initializer = "import sys; print('initializer started', flush=True); sys.stdin.read()"
+
+def run_initializer(command, **kwargs):
+    assert command[1:] == ["-m", "services.api.db"]
+    return run([sys.executable, "-c", initializer], **kwargs)
+
+server.subprocess.run = run_initializer
+raise SystemExit(server.serve(headless=True, data_dir=sys.argv[1]))
+'''
+    process = subprocess.Popen(
+        [sys.executable, "-c", supervisor, str(tmp_path / "data")],
+        cwd=server.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert select.select([process.stdout], [], [], 5)[0], "initializer never started"
+        assert process.stdout.readline().strip() == "initializer started"
+
+        process.terminate()
+        process.wait(timeout=5)
+
+        # The pipe stays open if the initializer outlives its supervisor.
+        assert select.select([process.stdout], [], [], 5)[0], "initializer survived SIGTERM"
+        assert process.stdout.read() == ""
+        assert process.returncode == 0
+    finally:
+        process.stdin.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+        process.stdout.close()
 
 
 def test_child_failure_propagates_exit_and_stops_peer(supervised, monkeypatch):
