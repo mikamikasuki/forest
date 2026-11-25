@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from fractions import Fraction
 from itertools import permutations
 
-VERSION = 4
-ORACLE_REVISION = 2
+VERSION = 5
+ORACLE_REVISION = 3
 
 @dataclass
 class Task:
@@ -32,6 +32,21 @@ class Task:
     @property
     def outputs(self):
         return ('solution.py', 'result.json', *self.extra_outputs)
+
+
+def result_types(expected):
+    def kind(value):
+        if isinstance(value,bool): return 'boolean'
+        if isinstance(value,(int,float)): return 'number'
+        if isinstance(value,str): return 'string'
+        if isinstance(value,list): return 'array'
+        if isinstance(value,dict): return 'object'
+        return 'null'
+    return {key:kind(value) for key,value in expected.items()}
+
+
+def task_instruction(task):
+    return task.prompt+'\nresult.json must be a JSON object with this exact top-level key/type contract: '+json.dumps(result_types(task.expected),sort_keys=True)+'. Include every key with its stated JSON type; do not replace the object with prose or use different key names.\nRead input.json and the supplied files. Write your own solution.py, execute it through the Python/process tools, inspect result.json, then finish. The script must write result.json. Required artifacts: '+', '.join(task.outputs)+'. Do not edit the platform or the qualification harness. This is an implementation task; no idea analysis is requested.'
 
 
 def make(ident, category, prompt, data, expected, files=None, extra=()):
@@ -112,7 +127,19 @@ def corpus():
         expected={'baseline_mean':b,'candidate_mean':c,'improvement':gain,'n_pairs':len(bv),'better_method':'candidate' if gain>1e-12 else 'baseline' if gain< -1e-12 else 'tie','source_id':'qualification-digits','data_file':'input.json','unit':'observation_id','actual_saved_outputs':True}
         files={'provenance.json':json.dumps(provenance),baseline+'.csv':(fixture/(baseline+'.csv')).read_text(),candidate+'.csv':(fixture/(candidate+'.csv')).read_text()}
         formulas='Accuracy is mean(argmax probability == label); log_loss uses natural log of true-label probability; brier is mean of SUM of squared multiclass errors (do not divide by ten); confidence is mean maximum probability and does not itself measure accuracy.'
-        add(ident,'writing','Recompute the requested metric from the actual saved prediction CSVs, applying label_filter only when non-null. Pair observations by observation_id. '+formulas+' Write an English report.md of 80–180 words, with both means and signed improvement (positive means candidate has the preferred metric), the better method or tie, and the number of paired observations. Read provenance.json. State the seed/regularization confound and compute budget scope; a confidence increase is not necessarily a quality improvement. Use citations [data:input.json] and [source:qualification-digits]. result.json must contain baseline_mean,candidate_mean,improvement,n_pairs,better_method,source_id,data_file,unit,actual_saved_outputs. Metadata definitions: data_file is the task-manifest filename "input.json"; source_id is provenance.json source_id ("qualification-digits"); unit is input.json paired_unit ("observation_id"). These identify supplied inputs, not computed metric values. No significance, causal, novelty or generalization claim is supported. These are actual prior run outputs, not simulated results.',data,expected,files,extra=('report.md',))
+        add(ident, 'writing',
+            'Recompute the requested metric from the actual saved prediction CSVs, applying label_filter only when non-null. '
+            'Pair observations by observation_id. ' + formulas +
+            ' Write an English report.md of 80–180 words. Label the decimal values directly as baseline mean, candidate mean, '
+            'and signed improvement, using forms such as "baseline mean: <value>". Positive improvement means candidate has '
+            'the preferred metric. State the better method or tie and number of paired observations. Read provenance.json. '
+            'State the seed/regularization confound and compute budget scope; a confidence increase is not necessarily a quality improvement. '
+            'Use citations [data:input.json] and [source:qualification-digits]. result.json must contain '
+            'baseline_mean,candidate_mean,improvement,n_pairs,better_method,source_id,data_file,unit,actual_saved_outputs. '
+            'Metadata definitions: data_file is the task-manifest filename "input.json"; source_id is provenance.json source_id '
+            '("qualification-digits"); unit is input.json paired_unit ("observation_id"). These identify supplied inputs, not computed metric values. '
+            'No significance, causal, novelty or generalization claim is supported. These are actual prior run outputs, not simulated results.',
+            data, expected, files, extra=('report.md',))
     return tasks
 
 
@@ -135,7 +162,7 @@ def compare(expected, observed, path='result'):
     return failures
 
 
-def check(task, artifacts):
+def check(task, artifacts, *, oracle_revision=ORACLE_REVISION):
     failures=[]
     for path in task.outputs:
         if not artifacts.get(path): failures.append(f'Missing/empty artifact: {path}')
@@ -149,10 +176,28 @@ def check(task, artifacts):
             if marker not in prose: failures.append(f'report.md missing source binding {marker}')
         for phrase in ('observation','seed','budget'):
             if phrase not in prose.lower(): failures.append(f'report.md omits required scope term {phrase}')
-        for field in ('baseline_mean','candidate_mean','improvement'):
-            value=task.expected[field]
-            numbers=[float(v) for v in re.findall(r'(?<![\w])[+-]?\d+(?:\.\d+)?',prose)]
-            if not any(math.isclose(value,n,rel_tol=0,abs_tol=0.00051) for n in numbers): failures.append(f'report.md does not bind numeric {field}={value:g}')
+        # Earlier in-flight attempts use the rubric saved when they started.
+        legacy_numbers = None
+        if oracle_revision < 3:
+            legacy_numbers = re.findall(r'(?<![\w])[+-]?\d+(?:\.\d+)?', prose)
+        metric_text = prose.replace('*', '').replace('`', '').replace('−', '-')
+        number = r'[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?'
+        for field in ('baseline_mean', 'candidate_mean', 'improvement'):
+            value = task.expected[field]
+            if legacy_numbers is None:
+                label = field.replace('_', r'[ _]+')
+                claims = re.findall(
+                    rf'\b{label}\b\s*(?:[:=|]|\b(?:is|was)\b)\s*({number})(?![\w]|\.\d)'
+                    r'(?:\s*(%|percent(?:age)?\b))?', metric_text, re.I,
+                )
+                bound = bool(claims) and all(
+                    not unit and math.isclose(value, float(n), rel_tol=0, abs_tol=0.00051)
+                    for n, unit in claims
+                )
+            else:
+                bound = any(math.isclose(value, float(n), rel_tol=0, abs_tol=0.00051) for n in legacy_numbers)
+            if not bound:
+                failures.append(f'report.md does not bind numeric {field}={value:g}')
     if task.id=='01-prime-independence':
         limit=json.loads(task.inputs['input.json'])['limit']
         expected=[n for n in range(2,limit+1) if all(n%d for d in range(2,math.isqrt(n)+1))]
