@@ -16,12 +16,14 @@ import {
 } from "./ui";
 import {
   acknowledgeAnalysisIntent,
+  analysisDraftChange,
   analysisDraftKey,
   analysisReferenceUrl,
   analysisReportMarkdown,
   persistAnalysisDraft,
   readAnalysisDraft,
   retainAnalysisIntent,
+  reviewAnalysisContext,
 } from "./researchAnalysisDraft";
 import type { AnalysisDraft, AnalysisScope } from "./researchAnalysisDraft";
 
@@ -758,12 +760,7 @@ function AnalysisSession({
   };
   useEffect(() => {
     if (draftRef.current.baseRevision === null)
-      edit((current) => ({
-        ...current,
-        baseRevision: context.snapshot.project_revision,
-        baseFingerprint: context.snapshot.fingerprint,
-        providerId: context.provider.id || "",
-      }));
+      edit((current) => reviewAnalysisContext(current, context));
   }, [
     context.snapshot.project_revision,
     context.snapshot.fingerprint,
@@ -784,10 +781,8 @@ function AnalysisSession({
     null,
   );
   const result = detail.data?.run_id === selected?.id ? detail.data : null;
-  const changed =
-    draft.baseRevision !== null &&
-    (draft.baseRevision !== context.snapshot.project_revision ||
-      draft.baseFingerprint !== context.snapshot.fingerprint);
+  const changed = analysisDraftChange(draft, context);
+  const retryProvider = changed?.providerChanged;
   useEffect(() => {
     if (!selected) return;
     const refresh = () => void detail.reload();
@@ -871,25 +866,17 @@ function AnalysisSession({
           {t("草稿使用的项目版本", "Draft project revision")}{" "}
           {draft.baseRevision ?? "—"}
         </p>
-        {changed && (
-          <p role="status">
-            {t(
-              "上下文已改变；当前草稿保留原版本。",
-              "Context changed; this draft retains its original revision.",
-            )}
-          </p>
-        )}
+        {changed && <p role="status">{t(changed.zh, changed.en)}</p>}
         <div className="inline-actions">
           <Button
             disabled={busy}
             onClick={() =>
-              edit((current) => ({
-                ...current,
-                baseRevision: context.snapshot.project_revision,
-                baseFingerprint: context.snapshot.fingerprint,
-                providerId: context.provider.id || "",
-                intent: undefined,
-              }))
+              edit((current) =>
+                reviewAnalysisContext(
+                  { ...current, intent: undefined },
+                  context,
+                ),
+              )
             }
           >
             <RefreshCw size={14} />
@@ -899,37 +886,44 @@ function AnalysisSession({
             className="primary"
             busy={busy}
             disabled={
-              !context.provider.available ||
-              !draft.providerId ||
-              draft.baseRevision === null
+              draft.baseRevision === null ||
+              (retryProvider
+                ? !draft.intent
+                : !context.provider.available || !draft.providerId)
             }
             onClick={async () => {
-              if (lock.current || draftRef.current.baseRevision === null)
+              const current = draftRef.current;
+              if (
+                lock.current ||
+                current.baseRevision === null ||
+                (retryProvider && !current.intent)
+              )
                 return;
               lock.current = true;
               setBusy(true);
               setError("");
-              const current = draftRef.current;
-              const next = retainAnalysisIntent(
-                current,
-                {
-                  expected_revision: current.baseRevision!,
-                  expected_fingerprint: current.baseFingerprint,
-                  scope,
-                  ...(scope === "node" ? { node_id: nodeId } : {}),
-                  ...(scope === "branch" ? { branch_id: branchId } : {}),
-                  question: current.question,
-                  language: lang === "zh" ? "zh" : "en",
-                  ...(current.literatureQuery.trim()
-                    ? { literature_query: current.literatureQuery.trim() }
-                    : {}),
-                  literature_sources: current.literatureSources,
-                  literature_limit: 6,
-                  timeout: 180,
-                  provider_id: current.providerId,
-                },
-                uid,
-              );
+              const next = retryProvider
+                ? current
+                : retainAnalysisIntent(
+                    current,
+                    {
+                      expected_revision: current.baseRevision!,
+                      expected_fingerprint: current.baseFingerprint,
+                      scope,
+                      ...(scope === "node" ? { node_id: nodeId } : {}),
+                      ...(scope === "branch" ? { branch_id: branchId } : {}),
+                      question: current.question,
+                      language: lang === "zh" ? "zh" : "en",
+                      ...(current.literatureQuery.trim()
+                        ? { literature_query: current.literatureQuery.trim() }
+                        : {}),
+                      literature_sources: current.literatureSources,
+                      literature_limit: 6,
+                      timeout: 180,
+                      provider_id: current.providerId,
+                    },
+                    uid,
+                  );
               edit(next);
               const intent = next.intent!;
               try {
@@ -985,7 +979,9 @@ function AnalysisSession({
             }}
           >
             <Send size={14} />
-            {t("请求 AI 分析", "Request AI analysis")}
+            {retryProvider && draft.intent
+              ? t("使用原服务商重试", "Retry with previous provider")
+              : t("请求 AI 分析", "Request AI analysis")}
           </Button>
         </div>
         <ErrorBox error={error} />
