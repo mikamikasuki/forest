@@ -92,8 +92,8 @@ def _assertion(value, catalog, name):
     for metric in re.findall(r'\[\[metric:([^]]+)\]\]', value['text']):
         if metric not in refs or catalog[metric]['kind'] != 'measurement':
             raise ValueError(name + ' contains an unbound measurement token')
-    if value['status'] == 'MEASURED' and re.search(r'(?<!\w)[+-]?\d+(?:\.\d+)?(?:%|\b)', re.sub(r'\[\[metric:[^]]+\]\]', '', value['text'])):
-        raise ValueError(name + ' must bind measured numeric results with actual metric tokens')
+    if value['status'] == 'MEASURED' and re.search(r'\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b', re.sub(r'\[\[metric:[^]]+\]\]', '', value['text'])):
+        raise ValueError(name + ' must bind measured numeric results to metric tokens')
     return refs
 
 
