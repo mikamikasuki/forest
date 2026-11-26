@@ -10,7 +10,7 @@ from fastapi.responses import Response, FileResponse
 from sqlalchemy import select
 from .common import *
 from .schemas import ResourceCreate
-from services.worker.scheduler import enqueue
+from services.worker.scheduler import _lock_project, enqueue
 from .paper_state import locked_project_paper, locked_paper, write_working_source, apply_generation_review
 router=APIRouter()
 @router.post('/api/library/search')
@@ -20,7 +20,7 @@ def search_library(body:dict=Body(...)):
     except Exception as exc: error('LITERATURE_SEARCH_FAILED',str(exc),502,'Try the other source or import a DOI.',True)
 @router.post('/api/library/import')
 def import_library(body:dict=Body(...)):
-    from research.literature.sources import import_identifier,extract_pdf,matches_publication
+    from research.literature.sources import import_identifier,matches_publication
     pid=body['project_id']; folder=project_dir(pid)/'library'; folder.mkdir(parents=True,exist_ok=True)
     if body.get('paper'): paper=body['paper']
     elif body.get('identifier'):
@@ -31,7 +31,7 @@ def import_library(body:dict=Body(...)):
     else: rows=[paper]
     saved=[]
     with Session.begin() as s:
-        get(s,Project,pid)
+        _lock_project(s,pid)
         for paper in rows:
             old=next((r for r in s.scalars(select(SourcePaper).where(SourcePaper.project_id==pid))
                       if matches_publication(paper,r.data,r.title)),None)
@@ -67,7 +67,6 @@ def reindex(ident:str):
     passages=extract_pdf(p)
     if isinstance(passages,dict): passages=passages.get('passages',[])
     with Session.begin() as s:
-        from services.worker.scheduler import _lock_project
         _lock_project(s,pid);r=get(s,SourcePaper,ident,for_update=True)
         if r.revision!=revision:error('REVISION_CONFLICT','Source changed during extraction; reindex the current source',409)
         # Keep the normalized passage rows in sync with the source snapshot. The
