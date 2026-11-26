@@ -53,8 +53,12 @@ receipts, checks units/data volume, and retains the remaining matrix explicitly.
 Statistics bind effects and confidence limits to the actual independent
 analysis measurements using JSON pointers.
 
-The manuscript audit requires real compilation, a readable current PDF, clean
-layout preflight, structured draft and actual LaTeX auxiliary placement report.
+The manuscript audit requires a readable PDF from the final compiler pass,
+clean layout preflight, structured draft and actual LaTeX auxiliary placement report.
+It compares the current source and PDF bytes with the originals retained by
+the declared compilation run. Recompile after either artifact changes or when
+an older run has no retained originals. Update the manifest with the new run
+and its artifact paths, then refresh the independent review.
 It checks the main Results comparison table, necessary mechanism illustration,
 Results analysis figure, scientific duties, local references and page proximity
 to their argumentative paragraphs. Accepted-paper length informs substantive

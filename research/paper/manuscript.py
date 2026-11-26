@@ -88,13 +88,16 @@ def apply_template(directory, template="article"):
     return info
 
 
-def compile_paper(directory, source_name="paper.tex", timeout=180, *, repair_layout=False, _layout_attempt=1):
+def compile_paper(directory, source_name="paper.tex", timeout=180, *, repair_layout=False, evidence_root=None, _layout_attempt=1):
+    from research.agents.artifacts import file_identity, matches_record, record_file
     from research.paper.layout import compile_preflight
     directory = Path(directory).resolve()
     source = (directory / source_name).resolve()
     if source.parent != directory or source.suffix != ".tex" or not source.is_file():
         raise ValueError("Compile a .tex source in the paper directory")
     tectonic, pdflatex = shutil.which("tectonic"), shutil.which("pdflatex")
+    records = Path(evidence_root).resolve() / '.forest-compile' if evidence_root is not None and (tectonic or pdflatex) else None
+    source_record = record_file(source, records) if records is not None else None
     logs = []
     if tectonic:
         commands = [[tectonic, "--keep-logs", "--keep-intermediates", "--outdir", str(directory), source.name]]
@@ -116,7 +119,10 @@ def compile_paper(directory, source_name="paper.tex", timeout=180, *, repair_lay
     pdf = directory / (source.stem + ".pdf")
     pdf.unlink(missing_ok=True)
     exit_code = 0
-    for command in commands:
+    previous_pdf = None
+    for index, command in enumerate(commands, 1):
+        if index == len(commands) and pdf.is_file():
+            previous_pdf = file_identity(pdf)
         try:
             process = subprocess.run(command, cwd=directory, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
             logs.append(process.stdout)
@@ -127,10 +133,26 @@ def compile_paper(directory, source_name="paper.tex", timeout=180, *, repair_lay
             logs.append(f"Compilation timed out after {timeout}s\n" + str(error.stdout or ""))
             exit_code = 124
             break
+    # pdfLaTeX can exit successfully without replacing an earlier pass's PDF.
+    success = exit_code == 0 and pdf.is_file() and file_identity(pdf) != previous_pdf
+    if exit_code == 0 and not success:
+        logs.append('The final compiler pass did not produce a current PDF.')
+    evidence = {}
+    if success and source_record:
+        if not matches_record(source, source_record) or file_identity(source) != source_record['file_identity']:
+            exit_code, success = 1, False
+            logs.append('Manuscript source changed during compilation. Recompile the current source.')
+        else:
+            pdf_record = record_file(pdf, records)
+            originals = {'paper_source': source_record, 'pdf_path': pdf_record}
+            evidence['compile_evidence'] = {
+                'paper_source': str(source), 'pdf_path': str(pdf), 'actual_compilation': True,
+                'compile_originals': {key: str(Path(record['snapshot_path']).relative_to(records.parent))
+                                      for key, record in originals.items()},
+            }
     log = "\n".join(logs)
     (directory / "compile.log").write_text(log)
     errors = [{"line": int(match.group(1)), "message": match.group(2).strip()} for match in re.finditer(r"(?:\.tex:|^l\.)(\d+)[: ]\s*(.*)", log, re.M)]
-    success = exit_code == 0 and pdf.is_file()
     report = compile_preflight(directory, source_name, success, log)
     if repair_layout and success and _layout_attempt <= 3:
         distant = [item for item in report.get('visual_placements', [])
@@ -159,12 +181,13 @@ def compile_paper(directory, source_name="paper.tex", timeout=180, *, repair_lay
                 'change': 'Flush earlier floats before the affected argumentative paragraph; preserve all text and evidence.'
             }, indent=2))
             source.write_text(revised)
-            result = compile_paper(directory, source_name, timeout, repair_layout=True, _layout_attempt=_layout_attempt + 1)
+            result = compile_paper(directory, source_name, timeout, repair_layout=True, evidence_root=evidence_root,
+                                   _layout_attempt=_layout_attempt + 1)
             result['layout_repair_attempts'] = max(result.get('layout_repair_attempts', 0), _layout_attempt)
             result['layout_repair_history'] = str(history)
             return result
     return {"status": "completed" if success else "failed", "exit_code": exit_code, "pdf_path": str(pdf) if success else None, "log": log, "log_path": str(directory / "compile.log"), "errors": errors,
-            "preflight": report, "preflight_path": str(directory / 'layout_preflight.json')}
+            "preflight": report, "preflight_path": str(directory / 'layout_preflight.json'), **evidence}
 
 
 def check_paper(directory, source_name="paper.tex"):
