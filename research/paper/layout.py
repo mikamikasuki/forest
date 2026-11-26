@@ -205,6 +205,85 @@ def float_barriers(source):
     return source
 
 
+_TABLE_TOKEN = re.compile(r'\\(begin|end)\s*\{([^{}\s]+)\}|\\(?:[A-Za-z]+|.)|[{}]|%[^\n]*')
+_TABLE_TRIVIA = re.compile(r'\s*(?:%[^\n]*(?:\n\s*|$))*')
+_ROW_SPACING = re.compile(r'\[[^\[\]{}%\\\r\n]+\]')
+
+
+def _top_level_table_commands(source):
+    """Find TeX control sequences outside braces, nested environments and comments."""
+    groups = []
+    environments = []
+    commands = []
+    for token in _TABLE_TOKEN.finditer(source):
+        value = token.group()
+        if value in ('{', r'\bgroup', r'\begingroup'):
+            groups.append(r'\endgroup' if value == r'\begingroup' else '}')
+        elif value in ('}', r'\egroup', r'\endgroup'):
+            closer = '}' if value == r'\egroup' else value
+            if not groups or groups.pop() != closer:
+                return None
+        elif value in (r'\verb', r'\catcode'):
+            # These can change how subsequent tokens are interpreted.
+            return None
+        elif token.group(1) == 'begin':
+            name = token.group(2)
+            if name in ('verbatim', 'verbatim*', 'Verbatim', 'lstlisting', 'minted', 'comment'):
+                return None
+            environments.append((name, len(groups)))
+        elif token.group(1) == 'end':
+            if not environments or environments.pop() != (token.group(2), len(groups)):
+                return None
+        elif value in (r'\begin', r'\end'):
+            return None
+        elif not groups and not environments and value.startswith('\\'):
+            commands.append(token)
+    return None if groups or environments else commands
+
+
+def _spaced_break_end(source, position):
+    following = _TABLE_TRIVIA.match(source, position).end()
+    if source[following:following+1] == '*':
+        # A starred break forbids a page break between these rows.
+        return None
+    if source[following:following+1] == '[':
+        spacing = _ROW_SPACING.match(source, following)
+        return spacing.end() if spacing is not None else None
+    return position
+
+
+def _table_rows(source, commands, start, end):
+    """Keep renderer-shaped rows intact rather than normalizing their TeX."""
+    rows = []
+    for token in commands:
+        if not start <= token.start() < end:
+            continue
+        if token.group() in (r'\cr', r'\crcr', r'\hline', r'\cline',
+                             r'\toprule', r'\midrule', r'\bottomrule', r'\cmidrule',
+                             r'\specialrule', r'\noalign',
+                             r'\endfirsthead', r'\endhead', r'\endfoot', r'\endlastfoot'):
+            return None
+        if token.group() in (r'\\', r'\tabularnewline', r'\addlinespace'):
+            stop = _spaced_break_end(source, token.end())
+            if stop is None:
+                return None
+            if token.group() == r'\addlinespace':
+                if not rows or _TABLE_TRIVIA.match(source, start).end() != token.start():
+                    return None
+                # Like explicit row spacing, keep the gap with the preceding row
+                # when the next row reflows into a different panel.
+                rows[-1] += source[start:stop]
+            else:
+                rows.append(source[start:stop])
+            start = stop
+    tail = source[start:end]
+    if not rows or _TABLE_TRIVIA.match(tail).end() != len(tail):
+        return None
+    if tail.strip():
+        rows[-1] += tail
+    return rows
+
+
 def _table_parts(body, environment='tabular'):
     """Parse only the renderer's booktabs structure, preserving edited cell text."""
     start = body.find('\\begin{' + environment + '}{')
@@ -221,22 +300,58 @@ def _table_parts(body, environment='tabular'):
     if stop is None:
         return None
     end = body.rfind('\\end{' + environment + '}')
-    top, mid = body.find('\\toprule', stop), body.find('\\midrule', stop)
-    bottom = body.rfind('\\bottomrule', stop, end)
-    if min(end, top, mid, bottom) < 0:
+    if end < stop:
         return None
-    data_start = body.find('\\endfoot', stop, end)
-    data_start = data_start + len('\\endfoot') if data_start >= 0 else mid + len('\\midrule')
-    data_end = end if environment == 'longtable' else bottom
-    rows = [row.strip() for row in body[data_start:data_end].split('\\\\') if row.strip()]
-    if not rows:
+    table = body[stop:end]
+    commands = _top_level_table_commands(table)
+    if commands is None:
         return None
-    return {'spec': body[spec_start:stop], 'header': body[top:mid+len('\\midrule')], 'rows': rows,
-            'start': start, 'stop': end+len('\\end{' + environment + '}'), 'caption': body[stop:top].strip()}
+    rules = {}
+    for token in commands:
+        rules.setdefault(token.group(), []).append(token)
+    if not all(rules.get(name) for name in (r'\toprule', r'\midrule', r'\bottomrule')):
+        return None
+    top, mid = rules[r'\toprule'][0], rules[r'\midrule'][0]
+    mid_end = _spaced_break_end(table, mid.end())
+    if top.start() >= mid.start() or mid_end is None:
+        return None
+    if environment == 'longtable':
+        footer = rules.get(r'\endfoot', [])
+        if len(footer) != 1 or rules.get(r'\endlastfoot') or footer[0].start() <= mid_end:
+            return None
+        data_start, data_end = footer[0].end(), len(table)
+    else:
+        bottom = rules[r'\bottomrule'][-1]
+        if bottom.start() <= mid_end or table[bottom.end():].strip():
+            return None
+        data_start, data_end = mid_end, bottom.start()
+    rows = _table_rows(table, commands, data_start, data_end)
+    if rows is None:
+        return None
+    return {'spec': body[spec_start:stop], 'header': table[top.start():mid_end], 'rows': rows,
+            'start': start, 'stop': end+len('\\end{' + environment + '}'), 'caption': table[:top.start()].strip()}
 
 
-def _tabular_text(parts, rows):
-    return '\\begin{tabular}' + parts['spec'] + '\n' + parts['header'] + '\n' + '\\\\\n'.join(rows) + '\\\\\n\\bottomrule\n\\end{tabular}'
+def _tabular_text(parts, rows, continued=False):
+    header = re.sub(r'\\label\{[^}]+\}', '', parts['header']) if continued else parts['header']
+    data = ''.join(rows)
+    if not data[:1].isspace():
+        data = '\n' + data
+    if not data.endswith('\n'):
+        data += '\n'
+    return '\\begin{tabular}' + parts['spec'] + '\n' + header + data + '\\bottomrule\n\\end{tabular}'
+
+
+def _longtable_spans(source):
+    start = None
+    for token in _TABLE_TOKEN.finditer(source):
+        if token.group(2) != 'longtable':
+            continue
+        if token.group(1) == 'begin':
+            start = token.start()
+        elif start is not None:
+            yield start, token.end()
+            start = None
 
 
 def apply_layout(directory, layout, template=None):
@@ -255,26 +370,29 @@ def apply_layout(directory, layout, template=None):
             source_path.write_text(_column_source(source, {**config, 'columns': 'single'}, 'article'))
         apply_template(directory, template)
         source = source_path.read_text()
-    source = float_barriers(_column_source(source, config, template))
     changed, warnings = [], []
-    # longtable cannot run in a two-column page; convert the recognized current
-    # table, including edits, to repeated full-width floats before float reflow.
-    def convert_longtable(match):
-        body = match.group()
-        parts = _table_parts(body, 'longtable')
-        if config['columns'] != 'double':
-            return body
-        if parts is None:
-            warnings.append({'code': 'custom_longtable_requires_review', 'message': 'An unrecognized longtable cannot be safely converted to two columns; its current source was retained.'})
-            return body
+    longtables = [(start, end, _table_parts(source[start:end], 'longtable'))
+                  for start, end in _longtable_spans(source)] if config['columns'] == 'double' else []
+    if any(parts is None for _, _, parts in longtables):
+        # A retained longtable cannot compile in two-column mode. Defer only
+        # the column change until its owner can make the custom table convertible.
+        config = {**config, 'columns': 'single'}
+        warnings.append({'code': 'custom_longtable_requires_review',
+                         'message': 'Kept one column instead of the requested two: an unrecognized longtable was retained without conversion.'})
+
+    # Convert recognized longtables, including edits, before float reflow.
+    def convert_longtable(parts):
         caption = parts['caption'].rstrip().removesuffix('\\\\').rstrip()
         result = []
         chunks = [parts['rows'][i:i+config['max_table_rows']] for i in range(0,len(parts['rows']),config['max_table_rows'])]
         for index, rows in enumerate(chunks):
             title = caption if index == 0 else re.sub(r'\\label\{[^}]+\}', '', caption)
-            result.append('\\begin{table*}[tbp]\n\\centering\n\\small\n' + title + '\n' + _tabular_text(parts, rows) + '\n\\end{table*}')
+            result.append('\\begin{table*}[tbp]\n\\centering\n\\small\n' + title + '\n' + _tabular_text(parts, rows, continued=index > 0) + '\n\\end{table*}')
         return '\n\n'.join(result)
-    source = re.sub(r'\\begin\{longtable\}.*?\\end\{longtable\}', convert_longtable, source, flags=re.S)
+    if config['columns'] == 'double':
+        for start, end, parts in reversed(longtables):
+            source = source[:start] + convert_longtable(parts) + source[end:]
+    source = float_barriers(_column_source(source, config, template))
     def float_block(match):
         kind, starred, placement, body = match.groups()
         if '\\includegraphics' not in body and not ('\\toprule' in body and '\\begin{tabular' in body):
@@ -284,31 +402,37 @@ def apply_layout(directory, layout, template=None):
         span = ('page' if config['columns'] == 'double' else 'column') if requested == 'auto' else requested
         star = '*' if span == 'page' and config['columns'] == 'double' else ''
         place = PLACEMENTS[config['float_placement']]
+        parts = _table_parts(body) if kind == 'table' else None
         if kind == 'table':
+            if parts is None:
+                warnings.append({'code': 'custom_table_row_limit_unapplied', 'message': 'This table has no recognized editable row structure; max_table_rows was not applied.'})
+                if '\\begin{tabular' in body:
+                    return match.group()
             font = config['table_font_pt']
             command = '\\fontsize{' + str(font) + '}{' + str(round(font * 1.2, 2)) + '}\\selectfont'
-            if re.search(r'\\fontsize\{[^}]+\}\{[^}]+\}\\selectfont', body):
-                body = re.sub(r'\\fontsize\{[^}]+\}\{[^}]+\}\\selectfont', lambda _: command, body)
+            prefix = body[:parts['start']] if parts else body
+            if re.search(r'\\fontsize\{[^}]+\}\{[^}]+\}\\selectfont', prefix):
+                prefix = re.sub(r'\\fontsize\{[^}]+\}\{[^}]+\}\\selectfont', lambda _: command, prefix)
             else:
-                body = re.sub(r'\\(?:small|footnotesize|scriptsize)\b', lambda _: command, body)
-        parts = _table_parts(body) if kind == 'table' else None
+                prefix = re.sub(r'\\(?:small|footnotesize|scriptsize)\b', lambda _: command, prefix)
         chunks = [parts['rows'][i:i+config['max_table_rows']] for i in range(0,len(parts['rows']),config['max_table_rows'])] if parts else []
-        if kind == 'table' and parts is None:
-            warnings.append({'code': 'custom_table_row_limit_unapplied', 'message': 'This table has no recognized editable row structure; max_table_rows was not applied.'})
         changed.append({'id': 'existing-' + str(len(changed)), 'type': kind, 'span': span,
                         'placement': config['float_placement'], 'strategy': 'preserve_current_source',
                         'font_pt': config['table_font_pt'] if kind == 'table' else None,
                         'rows': len(parts['rows']) if parts else None, 'panels': len(chunks) or 1,
                         'reasons': ['Reflowed current source; prose and cells preserved']})
-        bodies = [body]
-        if len(chunks) > 1:
-            changed[-1]['strategy'] = 'split_current_rows'
-            bodies = []
-            for index, rows in enumerate(chunks):
-                item = body[:parts['start']] + _tabular_text(parts, rows) + body[parts['stop']:]
-                if index:
-                    item = re.sub(r'\\label\{[^}]+\}', '', item)
-                bodies.append(item)
+        bodies = [prefix if kind == 'table' else body]
+        if parts:
+            suffix = body[parts['stop']:]
+            bodies = [prefix + body[parts['start']:parts['stop']] + suffix]
+            if len(chunks) > 1:
+                changed[-1]['strategy'] = 'split_current_rows'
+                bodies = []
+                for index, rows in enumerate(chunks):
+                    # Remove repeated float labels, not labels in the owner's data rows.
+                    before = re.sub(r'\\label\{[^}]+\}', '', prefix) if index else prefix
+                    after = re.sub(r'\\label\{[^}]+\}', '', suffix) if index else suffix
+                    bodies.append(before + _tabular_text(parts, rows, continued=index > 0) + after)
         return '\n\n'.join('\\begin{' + kind + star + '}[' + place + ']' + item + '\\end{' + kind + star + '}' for item in bodies)
     source = re.sub(r'\\begin\{(table|figure)(\*?)\}(?:\[([^]]*)\])?(.*?)\\end\{\1\2\}', float_block, source, flags=re.S)
     if config['columns'] == 'double':
