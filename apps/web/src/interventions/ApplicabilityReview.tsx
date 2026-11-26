@@ -1,27 +1,34 @@
 import { useState } from "react";
-import { api, uid } from "../api";
-import type { Graph } from "../api";
+import { api, ApiError, uid } from "../api";
+import type { Project } from "../api";
 import type { components } from "../../../../packages/contracts/api.generated";
 import { Badge, Button, ErrorBox, Field, Modal, useLoad, useUI } from "../ui";
 
 type Applicability = components["schemas"]["ApplicabilityView"];
+type EvidenceReview = {
+  goal: string;
+  revision: number;
+  executionGoals: Applicability["execution_goals"];
+  requestId: string;
+  stale: boolean;
+};
 
 export function ApplicabilityReview({
+  projectId,
   runId,
   completed,
 }: {
+  projectId: string;
   runId: string;
   completed: boolean;
 }) {
   const { t, action } = useUI();
-  const value = useLoad<Applicability>(
-    `/runs/${runId}/applicability`,
-    null as unknown as Applicability,
-  );
-  const [revision, setRevision] = useState<number | null>(null);
+  const path = `/runs/${runId}/applicability`;
+  const value = useLoad<Applicability | null>(path, null);
+  const [review, setReview] = useState<EvidenceReview | null>(null);
+  const [opening, setOpening] = useState(false);
   const [reason, setReason] = useState("");
   const [choice, setChoice] = useState<"reuse" | "exclude">("reuse");
-  const [requestId, setRequestId] = useState("");
   return (
     <section className="run-evidence-attempts">
       <strong>{t("当前目标适用性", "Applicability to current goal")}</strong>
@@ -38,18 +45,29 @@ export function ApplicabilityReview({
           </p>
           {completed && (
             <Button
+              busy={opening}
               onClick={() =>
                 action(async () => {
-                  const lineage = await api<{ project_id: string }>(
-                    `/runs/${runId}/lineage`,
-                  );
-                  const graph = await api<Graph>(
-                    `/projects/${lineage.project_id}/graph`,
-                  );
-                  setRevision(graph.revision);
-                  setRequestId(uid());
-                  setReason("");
-                  setChoice("reuse");
+                  setOpening(true);
+                  try {
+                    const [applicability, project] = await Promise.all([
+                      api<Applicability>(path),
+                      api<Project>(`/projects/${projectId}`),
+                    ]);
+                    value.setData(applicability);
+                    // The project response binds the displayed goal to its revision.
+                    setReview({
+                      goal: project.goal,
+                      revision: project.revision,
+                      executionGoals: applicability.execution_goals,
+                      requestId: uid(),
+                      stale: false,
+                    });
+                    setReason("");
+                    setChoice("reuse");
+                  } finally {
+                    setOpening(false);
+                  }
                 })
               }
             >
@@ -58,36 +76,55 @@ export function ApplicabilityReview({
           )}
         </>
       )}
-      {revision !== null && (
+      {review && (
         <Modal
           title={t(
             "审阅证据与当前目标",
             "Review evidence against current goal",
           )}
-          onClose={() => setRevision(null)}
+          onClose={() => setReview(null)}
         >
           <form
             onSubmit={(event) => {
               event.preventDefault();
+              if (review.stale) return;
               void action(async () => {
-                await api(`/runs/${runId}/applicability/decisions`, "POST", {
-                  request_id: requestId,
-                  expected_revision: revision,
-                  choice,
-                  reason,
-                });
-                setRevision(null);
+                try {
+                  await api(`${path}/decisions`, "POST", {
+                    request_id: review.requestId,
+                    expected_revision: review.revision,
+                    choice,
+                    reason,
+                  });
+                } catch (error) {
+                  if (
+                    error instanceof ApiError &&
+                    error.code === "REVISION_CONFLICT"
+                  ) {
+                    setReview((current) =>
+                      current?.requestId === review.requestId
+                        ? { ...current, stale: true }
+                        : current,
+                    );
+                    void value.reload();
+                    return;
+                  }
+                  throw error;
+                }
+                setReview((current) =>
+                  current?.requestId === review.requestId ? null : current,
+                );
                 await value.reload();
               });
             }}
           >
             <Field label={t("当前目标", "Current goal")}>
-              <p>{value.data?.current_goal}</p>
+              <p>{review.goal}</p>
             </Field>
             <Field
               label={t("执行时采用的目标", "Goals recorded during execution")}
             >
-              <pre>{JSON.stringify(value.data?.execution_goals, null, 2)}</pre>
+              <pre>{JSON.stringify(review.executionGoals, null, 2)}</pre>
             </Field>
             <Field label={t("证据用途", "Evidence use")}>
               <select
@@ -114,7 +151,19 @@ export function ApplicabilityReview({
                 onChange={(event) => setReason(event.target.value)}
               />
             </Field>
-            <Button type="submit" className="primary" disabled={!reason.trim()}>
+            {review.stale && (
+              <ErrorBox
+                error={t(
+                  "项目已更改。请关闭此审阅，然后重新打开以确认当前目标。",
+                  "The project changed. Close and reopen this review to confirm the current goal.",
+                )}
+              />
+            )}
+            <Button
+              type="submit"
+              className="primary"
+              disabled={review.stale || !reason.trim()}
+            >
               {t("保存证据用途决定", "Save evidence-use decision")}
             </Button>
           </form>

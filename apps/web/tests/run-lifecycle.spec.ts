@@ -92,6 +92,130 @@ async function cleanup(
   ).toBeTruthy();
 }
 
+test("evidence review saves only against the displayed goal", async ({
+  page,
+  request,
+}) => {
+  const projectId = await createProject(
+    request,
+    "Evidence review goal binding",
+  );
+  const projectPath = `/api/projects/${projectId}`;
+  const runIds: string[] = [];
+  try {
+    const run = await enqueue(
+      request,
+      projectId,
+      "Provider-free evidence",
+      0.5,
+    );
+    runIds.push(run.id);
+    await expect
+      .poll(async () => (await readRun(request, run.id)).status)
+      .toBe("completed");
+    const executionGoal = (await readRun(request, run.id)).config.project_goal;
+    const applicabilityPath = `/api/runs/${run.id}/applicability`;
+    const decisionPath = `${applicabilityPath}/decisions`;
+    const review = page.getByRole("button", { name: "Review evidence use" });
+    const dialog = page.getByRole("dialog", {
+      name: "Review evidence against current goal",
+    });
+    const save = dialog.getByRole("button", {
+      name: "Save evidence-use decision",
+    });
+    const reason = dialog.locator("textarea");
+    const currentGoal = dialog.locator("p").first();
+    const goalAfterPanel = "Goal revised while the evidence panel is open";
+    const goalAfterReview = "Goal revised while the evidence review is open";
+
+    const changeGoal = async (goal: string) => {
+      const project = await (await request.get(projectPath)).json();
+      const edited = await request.patch(projectPath, {
+        data: { goal, expected_revision: project.revision },
+      });
+      expect(edited.ok(), await edited.text()).toBeTruthy();
+      return edited.json();
+    };
+    const saveReview = async () => {
+      const response = page.waitForResponse(
+        (result) =>
+          result.request().method() === "POST" &&
+          result.url().endsWith(decisionPath),
+      );
+      await save.click();
+      return response;
+    };
+
+    await page.goto(`/projects/${projectId}/runs?run=${run.id}`);
+    const original = page.waitForResponse((response) =>
+      response.url().endsWith(applicabilityPath),
+    );
+    await page.getByText("Evidence and recovery", { exact: true }).click();
+    expect((await (await original).json()).current_goal).toBe(executionGoal);
+    const revised = await changeGoal(goalAfterPanel);
+
+    await review.click();
+    await expect(currentGoal).toHaveText(goalAfterPanel);
+    await expect(dialog.locator("pre")).toContainText(executionGoal);
+    await reason.fill("The evidence applies to the revised question.");
+    const saved = await saveReview();
+    expect(saved.ok(), await saved.text()).toBeTruthy();
+    expect(saved.request().postDataJSON().expected_revision).toBe(
+      revised.revision,
+    );
+    const receipt = await saved.json();
+    expect(
+      (await (await request.get(`/api/interventions/${receipt.id}`)).json())
+        .intent,
+    ).toMatchObject({
+      goal: goalAfterPanel,
+      run_id: run.id,
+      choice: "reuse",
+    });
+    await expect(dialog).toBeHidden();
+
+    await review.click();
+    await expect(currentGoal).toHaveText(goalAfterPanel);
+    await reason.fill("This draft belongs to the goal shown in this review.");
+    const refreshed = page.waitForResponse(
+      async (response) =>
+        response.request().method() === "GET" &&
+        response.url().endsWith(projectPath) &&
+        (await response.json()).goal === goalAfterReview,
+    );
+    await changeGoal(goalAfterReview);
+    await refreshed;
+    await expect(currentGoal).toHaveText(goalAfterPanel);
+    await expect(reason).toHaveValue(
+      "This draft belongs to the goal shown in this review.",
+    );
+    const stale = await saveReview();
+    expect(stale.status()).toBe(409);
+    expect((await stale.json()).detail.code).toBe("REVISION_CONFLICT");
+    await expect(save).toBeDisabled();
+    await expect(reason).toHaveValue(
+      "This draft belongs to the goal shown in this review.",
+    );
+    const interventions = await (
+      await request.get(`${projectPath}/interventions`)
+    ).json();
+    expect(
+      interventions
+        .filter(
+          (item: { kind: string }) => item.kind === "evidence_applicability",
+        )
+        .map((item: { id: string }) => item.id),
+    ).toEqual([receipt.id]);
+
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await review.click();
+    await expect(currentGoal).toHaveText(goalAfterReview);
+    await expect(reason).toHaveValue("");
+  } finally {
+    await cleanup(request, projectId, runIds);
+  }
+});
+
 test("actual stopped debug checkpoint saves an override separately from same-run Resume", async ({
   page,
   request,
