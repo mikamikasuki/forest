@@ -14,7 +14,7 @@ from research.paper.manuscript import check_paper, compile_paper, generate_paper
 from research.paper.statistical_workflow import prepare_statistical_presentation
 
 
-def measured_evidence(tmp_path, checkpoints=(16, 64, 256)):
+def measured_evidence(tmp_path, checkpoints=(16, 64, 256), *, paired=False):
     runs = []
     for seed in range(5):
         observations = []
@@ -42,6 +42,8 @@ def measured_evidence(tmp_path, checkpoints=(16, 64, 256)):
                        'metrics': ['absolute_error', 'squared_error'], 'seeds': list(range(5)), 'x': list(checkpoints)},
             'axes': {'x': {'label': 'Function evaluations', 'unit': 'count'}},
             'uncertainty': {'type': 't_ci', 'unit': 'seed', 'independent': True, 'confidence': .95}}}
+        if paired and seed == 0:
+            artifact['statistics']['comparisons'] = [{'baseline': 'Monte Carlo', 'candidate': 'Stratified'}]
         (folder / 'metrics.json').write_text(json.dumps(artifact))
         runs.append({'id': 'quad-' + str(seed), 'status': 'completed', 'directory': str(folder)})
     return collect_evidence(runs)
@@ -76,6 +78,7 @@ def test_curves_preserve_every_run_method_dataset_and_checkpoint(tmp_path):
     paths = render_figure(tmp_path / 'curve', plot_data(evidence), {'metric': 'absolute_error'}, 'line')
     report = json.loads(Path(paths['report']).read_text())
     assert report['panels'] == 2 and report['displayed_points'] == 18
+    assert report['unit'] == 'integral units'
     assert {row['n_units'] for row in report['displayed_measurements']} == {5}
     assert {row['x'] for row in report['displayed_measurements']} == {16, 64, 256}
     assert report['minimum_font_pt'] >= 8
@@ -83,7 +86,8 @@ def test_curves_preserve_every_run_method_dataset_and_checkpoint(tmp_path):
     for row in report['displayed_measurements']:
         assert uncertainty_bounds(row) == (row['ci_low'], row['ci_high'])
     assert Path(paths['pdf']).read_bytes().startswith(b'%PDF')
-    assert 'Function evaluations' in Path(paths['svg']).read_text()
+    svg = Path(paths['svg']).read_text()
+    assert 'Function evaluations' in svg and '↓' in svg
 
 
 def test_plot_rejects_value_identity_and_unit_tampering(tmp_path):
@@ -98,6 +102,19 @@ def test_plot_rejects_value_identity_and_unit_tampering(tmp_path):
             render_figure(tmp_path / field, data, {'metric': 'absolute_error'}, 'line')
     with pytest.raises(ValueError, match='units'):
         render_figure(tmp_path / 'units', plot_data(evidence), {'metric': 'absolute_error', 'unit': '%'}, 'line')
+
+
+@pytest.mark.parametrize(('collection', 'kind'), [('records', 'line'), ('comparisons', 'forest')])
+@pytest.mark.parametrize(('field', 'value'), [('unit', 'seconds'), ('direction', 'higher')])
+def test_plot_rejects_metadata_that_differs_from_bound_metric(tmp_path, collection, kind, field, value):
+    evidence = measured_evidence(tmp_path, (16, 64), paired=kind == 'forest')
+    data = plot_data(evidence)
+    for row in data['statistical_results'][collection]:
+        if row['metric'] == 'absolute_error':
+            row[field] = value
+
+    with pytest.raises(ValueError, match='source binding: ' + field):
+        render_figure(tmp_path / 'plot', data, {'metric': 'absolute_error'}, kind)
 
 
 def test_plot_rejects_missing_checkpoint_and_seed_axis(tmp_path):
