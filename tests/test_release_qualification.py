@@ -79,6 +79,53 @@ def test_oracle_rejects_missing_wrong_nonfinite_and_unbound_outputs():
     assert any('word count' in f for f in failures)
 
 
+@pytest.mark.parametrize(('means', 'unbound'), [
+    ('The baseline mean is 0.913333 and the candidate mean is 0.906667.', ()),
+    ('**Baseline mean:** 0.913 and **candidate mean:** 0.907.', ()),
+    ('The baseline mean is 0.906667 and the candidate mean is 0.913333.', ('baseline_mean', 'candidate_mean')),
+    ('The two means are 0.913333 and 0.906667.', ('baseline_mean', 'candidate_mean')),
+    ('Baseline mean: 0.913333. The baseline mean was 0.906667. Candidate mean: 0.906667.', ('baseline_mean',)),
+    ('Baseline mean: 0.913333 %. Candidate mean: 0.906667.', ('baseline_mean',)),
+])
+def test_writing_oracle_binds_reported_means_to_labels(means, unbound):
+    task = next(task for task in corpus() if task.id == '25-paired-accuracy')
+    report = (
+        f'{means} The signed improvement is -0.006667. Baseline is the better method across '
+        '450 paired observations. The observations are paired by observation_id. The seed and '
+        'regularization settings differ, and the compute budget was unequal, so the comparison '
+        'is confounded and provides no causal or generalizable evidence. A confidence increase '
+        'is not necessarily a quality improvement. This analysis summarizes the supplied split '
+        'and the observed prediction results. The measured predictions are saved outputs '
+        '[data:input.json] and use the dataset provenance [source:qualification-digits].'
+    )
+    artifacts = {
+        'solution.py': '# Report validation fixture',
+        'result.json': json.dumps(task.expected),
+        'report.md': report,
+    }
+    failures = check(task, artifacts)
+    assert len(failures) == len(unbound)
+    for field in unbound:
+        assert any(field in failure for failure in failures)
+    if unbound:
+        assert check(task, artifacts, oracle_revision=2) == []
+
+
+def test_rescore_leaves_ungraded_attempt_for_resume(tmp_path):
+    from scripts.qualify_release import rescore
+
+    record = {'id': '25-paired-accuracy', 'status': 'running', 'run_id': 'run-1',
+              'conditions': {'corpus_version': 4, 'oracle_revision': 2}}
+    report = {'tasks': [record.copy()]}
+
+    def read_run(*_args):
+        pytest.fail('An ungraded attempt must be resumed before any rescore reads')
+
+    rescore(read_run, argparse.Namespace(task=None, report=tmp_path / 'release-agents.json'), report)
+    assert report['tasks'] == [record]
+    assert report['rescore_operations'][-1]['records'] == []
+
+
 def test_prime_oracle_rejects_algorithm_alias_and_fabricated_counts():
     artifacts={'metrics.json':json.dumps({'trial_count':1229,'sieve_count':1229}),'report.md':'Two names are not two independent algorithms.','alias.py':'def trial(n):\n return [i for i in range(2,n+1) if all(i%d for d in range(2,i))]\ndef sieve(n):\n return trial(n)\n'}
     # No actual second mechanism: a wrapper named sieve is not sufficient.
@@ -200,7 +247,7 @@ def test_numeric_oracle_accepts_equal_integer_float_but_not_booleans():
 def test_current_contract_types_and_unambiguous_text_counts():
     from scripts.qualification.tasks import VERSION,ORACLE_REVISION
     from scripts.qualify_release import result_types
-    assert VERSION==4 and ORACLE_REVISION==2
+    assert VERSION==5 and ORACLE_REVISION==3
     for task in corpus():
         contract=result_types(task.expected)
         assert set(contract)==set(task.expected)

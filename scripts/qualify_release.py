@@ -25,7 +25,7 @@ import httpx
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from scripts.qualification.tasks import VERSION, ORACLE_REVISION, corpus, check
+from scripts.qualification.tasks import VERSION, ORACLE_REVISION, corpus, check, result_types, task_instruction
 
 AGENT_CONTEXT_CHARS=24000
 TERMINAL={'completed','failed','interrupted','cancelled','skipped','budget_exhausted','waiting_input'}
@@ -178,23 +178,8 @@ def run_prime(api,args,record,persist):
     record.update(status='passed' if not failures else 'failed',finished_at=utc(),failures=failures,controller=control,checked=checked,runs=[{'id':r['id'],'kind':r['kind'],'status':r['status'],'error':r.get('error'),'metrics':r.get('metrics',{})} for r in runs]); persist()
 
 
-def result_types(expected):
-    def kind(value):
-        if isinstance(value,bool): return 'boolean'
-        if isinstance(value,(int,float)): return 'number'
-        if isinstance(value,str): return 'string'
-        if isinstance(value,list): return 'array'
-        if isinstance(value,dict): return 'object'
-        return 'null'
-    return {key:kind(value) for key,value in expected.items()}
-
-
 def evaluated_status(record):
     return record.get('latest_evaluation',{}).get('status',record.get('status'))
-
-
-def task_instruction(task):
-    return task.prompt+'\nresult.json must be a JSON object with this exact top-level key/type contract: '+json.dumps(result_types(task.expected),sort_keys=True)+'. Include every key with its stated JSON type; do not replace the object with prose or use different key names.\nRead input.json and the supplied files. Write your own solution.py, execute it through the Python/process tools, inspect result.json, then finish. The script must write result.json. Required artifacts: '+', '.join(task.outputs)+'. Do not edit the platform or the qualification harness. This is an implementation task; no idea analysis is requested.'
 
 
 def agents(api,args,report):
@@ -219,6 +204,7 @@ def agents(api,args,report):
         if previous and evaluated_status(previous[-1])=='passed': continue
         record=previous[-1] if previous and previous[-1]['status']=='running' else {'id':task.id,'category':task.category,'attempt':len(previous)+1,'status':'running','started_at':utc(),'conditions':{'corpus_version':VERSION,'oracle_revision':ORACLE_REVISION,'provider_id':args.provider_id,'model':provider.get('model'),'context_char_budget':AGENT_CONTEXT_CHARS,'round_steps':args.max_steps,'task_timeout':args.task_timeout,'instructions':PRIME_GOAL if task.id=='01-prime-independence' else task_instruction(task),'output_contract':{'required_artifacts':['metrics.json','report.md'] if task.id=='01-prime-independence' else list(task.outputs),'metrics_required_keys':[] if task.id=='01-prime-independence' else list(task.expected.keys()),'top_level_types':{} if task.id=='01-prime-independence' else result_types(task.expected)}}}
         if record not in report['tasks']: report['tasks'].append(record)
+        conditions=record.get('conditions',{})
         persist()
         if args.allow_paid:
             remaining=report['provider_usage_latest'].get('remaining_usd')
@@ -234,7 +220,7 @@ def agents(api,args,report):
                     project,graph=api.project('Release qualification · '+task.id,'Complete this bounded executable qualification task. Mathematical and parsing fixtures are program inputs. Prediction CSVs are actual prior execution outputs with provenance.',args.allow_paid)
                     pid=project['id']; branch=graph['branches'][0]
                     for name,content in task.inputs.items(): api.write(pid,branch['workspace']+'/'+name,content)
-                    instruction=task_instruction(task)
+                    instruction=conditions.get('instructions') or task_instruction(task)
                     config={'kind':'agent','role':'Engineer' if task.category!='writing' else 'Analyst','provider_id':args.provider_id,'required_outputs':list(task.outputs),'metrics_file':'result.json','metrics_required_keys':list(task.expected.keys()),'instructions':instruction,'context_char_budget':AGENT_CONTEXT_CHARS,'agent_budget':{'active_seconds':args.task_timeout},**({'execution_round':{'steps':args.max_steps}} if args.max_steps is not None else {}),'resources':{'cpu':1,'memory_gb':.5}}
                     nid=api.node(pid,branch['id'],task.id,instruction,config)
                     record.update(project_id=pid,node_id=nid,request_id=str(uuid.uuid4())); persist()
@@ -243,7 +229,7 @@ def agents(api,args,report):
             if run['status'] not in TERMINAL:
                 record.update(status='running',monitor_timeout=True); persist(); return
             artifacts,session,receipts,errors=evidence(api,run,task.outputs)
-            errors.extend(check(task,artifacts))
+            errors.extend(check(task,artifacts,oracle_revision=conditions.get('oracle_revision',1)))
             if run['status']!='completed': errors.append('Agent run status: '+run['status'])
             folder=Path(args.report).parent/'release-artifacts'/task.id/run['id']
             for name,content in artifacts.items():
@@ -260,6 +246,7 @@ def rescore(api,args,report):
     tasks={t.id:t for t in corpus()}; rescored=[]
     for record in report.get('tasks',[]):
         task=tasks.get(record.get('id'))
+        if record.get('status') not in ('passed', 'failed'): continue
         if not task or task.id=='01-prime-independence' or (args.task and task.id not in args.task) or not record.get('run_id'): continue
         run=api('GET',f'/api/runs/{record["run_id"]}')
         if run['status']!='completed': continue
