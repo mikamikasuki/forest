@@ -17,7 +17,13 @@ from research.paper.visual_review import placement_requests
 
 def test_insertion_keeps_exact_author_prose_and_compiles_with_a_real_asset(tmp_path):
     paragraph='The observed sums increase with the sequence endpoint.'
-    source='\\documentclass{article}\n\\begin{document}\n\\section{Results}\n'+paragraph+'\n\nA separate paragraph remains intact.\n\\end{document}\n'
+    source = '\n'.join([
+        r'\documentclass{article}', r'\usepackage{hyperref}', r'\begin{document}',
+        r'Reference: \url{https://example.org/report%20files}.',
+        r'Appendix: \href[page=2]{https://example.org/data%20appendix.pdf}{linked PDF}.',
+        r'\section{Results}', paragraph, '', 'A separate paragraph remains intact.',
+        r'\end{document}', '',
+    ])
     rows=[{'dataset':'integer sequence','method':str(n),'score':sum(range(n))} for n in range(3,15)]
     paths=render_figure(tmp_path/'figures'/'sums',rows,{'metric':'score','unit':'integer sum','layout_width_in':6.5,'font_size':9})
     result=insert_figure(source,asset_path='figures/sums/figure.pdf',caption='All twelve computed sequence sums.',label='fig:sums',anchor_text=paragraph)

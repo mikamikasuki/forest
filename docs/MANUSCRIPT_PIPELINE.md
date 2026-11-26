@@ -66,7 +66,7 @@ The full-submission controller uses the delivery audit in addition to task compl
 
 ## Insert a Studio figure into current manuscript prose
 
-In **Paper → Insert a reviewed figure in the manuscript**, select a `ready_for_review` Figure Studio asset and paste a unique existing paragraph from the current source. Pending source edits are saved first. The image and numbered reference are inserted immediately after the anchor; the current source remains editable. Compile again to inspect the actual position.
+In **Paper → Insert a reviewed figure in the manuscript**, select a `ready_for_review` Figure Studio asset and paste a unique existing paragraph from the current LaTeX source. Include the paragraph's final source line and any inline formatting. Choose body prose outside headings, comments, equations, and LaTeX environments. Pending source edits are saved first. The image and numbered reference are inserted after the paragraph. Compile again to inspect the actual position.
 
 The equivalent operation is `POST /api/papers/{project_id}/figures`:
 
@@ -79,7 +79,7 @@ The equivalent operation is `POST /api/papers/{project_id}/figures`:
 }
 ```
 
-Use the actual current paper revision. `span` accepts `column` or `page`; an optional `caption` overrides the Studio caption. The API admits a rendered same-project `ready_for_review` or existing `available` asset, copies its PDF/PNG/JPEG and available companions under `paper/figures/{figure_id}/`, and records the figure revision, source runs, label and anchor. Revision conflicts return `409`; absent, ambiguous or non-body anchors, duplicate labels and cross-project selections are rejected. Insertion advances the paper revision and clears previous layout checks, so saved checks from the preceding source cannot establish the new PDF's placement.
+Use the actual current paper revision. `span` accepts `column` or `page`, and an optional `caption` overrides the Studio caption. The API admits a rendered same-project `ready_for_review` or existing `available` asset, copies its PDF/PNG/JPEG and available companions under `paper/figures/{figure_id}/`, and records the figure revision, source runs, label and anchor. Revision conflicts return `409`. Absent, ambiguous or non-prose anchors and duplicate labels return `422 INVALID_FIGURE_ANCHOR` before assets are copied or the revision advances. Cross-project selections are rejected. Insertion advances the paper revision and clears previous layout checks, so saved checks from the preceding source cannot establish the new PDF's placement.
 
 ## Compile an Agent-authored workspace manuscript
 
