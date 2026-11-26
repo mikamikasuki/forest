@@ -235,7 +235,9 @@ def _record_table(block, evidence, spec):
     complete = spec.get('require_complete', block.get('argumentative_duty') == 'effectiveness')
     if complete:
         coverage = statistics.get('coverage') or {}
-        if coverage.get('complete') is False:
+        if coverage.get('design_declared') is not True:
+            raise ValueError('A complete statistical table requires a declared experiment design')
+        if coverage.get('complete') is not True:
             raise ValueError('A complete statistical table requires the declared experiment coverage')
         eligible = [record for record in records if (_key(record.get('x')) in {_key(value) for value in spec['x']} if 'x' in spec else record.get('x') is None)]
         selected_metrics = {record['metric'] for record in selected}

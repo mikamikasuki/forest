@@ -8,11 +8,13 @@ import pytest
 from research.analysis.presentation import attach_statistical_evidence
 from research.paper.evidence import _numbers, collect_evidence
 from research.paper.statistical_workflow import prepare_statistical_presentation
+from research.paper.tables import (default_statistical_tables, materialize_statistical_tables,
+                                  validate_statistical_tables)
 import research.paper.statistical_workflow as workflow
 
 
 def measured_evidence(tmp_path, *, curve=False, datasets=('D1', 'D2'), metrics=('score',),
-                      paired=False, intervals=False, points=(100, 200)):
+                      paired=False, intervals=False, points=(100, 200), declared_design=True):
     runs = []
     for index, seeds in enumerate(((0, 1), (2,))):
         rows = []
@@ -31,6 +33,8 @@ def measured_evidence(tmp_path, *, curve=False, datasets=('D1', 'D2'), metrics=(
                                   'metrics': list(metrics), 'seeds': [0, 1, 2]}}
         if curve:
             statistical['design']['x'] = list(points)
+        if not declared_design:
+            del statistical['design']
         if intervals:
             statistical['uncertainty'] = {'type': 't_ci', 'unit': 'seed', 'independent': True}
         if paired:
@@ -48,6 +52,26 @@ def measured_evidence(tmp_path, *, curve=False, datasets=('D1', 'D2'), metrics=(
             evidence['metrics'].append({'id': 'm' + str(len(evidence['metrics'])), 'run_id': run['id'],
                                         'pointer': pointer, 'value': value})
     return attach_statistical_evidence(evidence)
+
+
+def test_complete_effectiveness_table_requires_declared_design(tmp_path):
+    evidence = measured_evidence(tmp_path, declared_design=False)
+    coverage = evidence['statistics']['coverage']
+    assert coverage['complete'] is True
+    assert coverage['design_declared'] is False
+
+    plan, = default_statistical_tables(evidence)
+    draft = {'sections': [{'blocks': [plan]}]}
+    with pytest.raises(ValueError, match='declared experiment design'):
+        materialize_statistical_tables(draft, evidence)
+    with pytest.raises(ValueError, match='declared experiment design'):
+        validate_statistical_tables(draft, evidence)
+
+    plan['statistics_spec']['require_complete'] = False
+    exploratory = materialize_statistical_tables(draft, evidence)
+    block = exploratory['sections'][0]['blocks'][0]
+    assert block['statistics_binding']['complete'] is False
+    assert validate_statistical_tables(exploratory, evidence)['tables'] == 1
 
 
 def report(figure):

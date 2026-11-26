@@ -155,7 +155,7 @@ def test_recorded_revision_returns_materialized_statistical_table(tmp_path):
               'uncertainty': {'type': 'none'}, 'refs': {'estimate': 'statm0'},
               'source_run_id': 'run-1', 'source_pointer': '/error'}
     evidence['statistics'] = {'version': 1, 'records': [record], 'comparisons': [],
-                              'coverage': {'complete': True}}
+                              'coverage': {'complete': True, 'design_declared': True}}
     evidence['metrics'].append({'id': 'statm0', 'value': actual_error, 'run_id': 'run-1',
                                 'pointer': '/error'})
     original = valid_draft()
