@@ -224,7 +224,7 @@ def managed_change(s, project_id, project_path, attribution, action_id=None):
         if relative and allowed(relative): observe(s,scope,relative,scope.scan_generation,attribution,action_id)
 
 def reconcile(scope_id):
-    """At most 200 entries / 2 MiB content per pass, resumable directory cursor."""
+    """Bounded depth-first inventory with durable directory cursors."""
     with Session.begin() as s:
         scope=s.get(ObservationScope,scope_id)
         if not scope or not scope_authorized(s,scope): return
@@ -241,35 +241,37 @@ def reconcile(scope_id):
         if not scope.queue or scope.coverage in ('pending','unavailable'):
             scope.scan_generation+=1; scope.queue=[['','']]
             scope.error=None
-        generation=scope.scan_generation; queue=[list(v) for v in scope.queue]
-        consumed=0; byte_count=0
-        while queue and consumed<ENTRIES_PER_PASS and byte_count<BYTES_PER_PASS:
-            directory,cursor=queue[0]
-            folder=root/directory
-            try:
-                if folder.is_symlink() or not folder.resolve().is_relative_to(root.resolve()): raise PermissionError()
-                with os.scandir(folder) as iterator:
-                    entries=heapq.nsmallest(ENTRIES_PER_PASS-consumed+1,(e for e in iterator if e.name>cursor),key=lambda e:e.name)
-            except OSError:
-                scope.error='Directory unavailable during scan'; queue.pop(0); continue
-            exhausted=True
-            for entry in entries:
-                relative=(PurePosixPath(directory)/entry.name).as_posix()
-                queue[0][1]=entry.name; consumed+=1
-                excluded=(not allowed(relative) or entry.is_symlink() or
-                          scope.kind=='project' and entry.name in ('branches','runs') and not directory or
-                          scope.kind=='run_output' and entry.name=='workspace' and not directory)
-                if not excluded:
-                    if entry.is_dir(follow_symlinks=False):
-                        if len(queue)<2048: queue.append([relative,''])
-                        else: scope.error='Directory queue capacity reached; inventory is incomplete'
-                    elif entry.is_file(follow_symlinks=False):
-                        f=observe(s,scope,relative,generation)
-                        if f: byte_count+=min(f.size,CONTENT_LIMIT)
-                if consumed>=ENTRIES_PER_PASS or byte_count>=BYTES_PER_PASS: exhausted=False; break
-            if exhausted: queue.pop(0)
-        scope.queue=queue; scope.coverage='partial' if queue or scope.error else 'complete'; scope.observed_at=now()
-        if not queue and not scope.error:
+        generation=scope.scan_generation; stack=[list(v) for v in scope.queue]
+        batches={}
+        consumed=byte_count=0
+        while stack and consumed<ENTRIES_PER_PASS and byte_count<BYTES_PER_PASS:
+            directory,cursor=stack[-1]
+            if directory not in batches:
+                folder=root/directory
+                try:
+                    if folder.is_symlink() or not folder.resolve().is_relative_to(root.resolve()): raise PermissionError()
+                    with os.scandir(folder) as entries:
+                        batches[directory]=iter(heapq.nsmallest(
+                            ENTRIES_PER_PASS-consumed,(e for e in entries if e.name>cursor),key=lambda e:e.name))
+                except OSError:
+                    scope.error='Directory unavailable during scan'; stack.pop(); continue
+            entry=next(batches[directory],None)
+            if entry is None:
+                del batches[directory]; stack.pop(); continue
+            stack[-1][1]=entry.name; consumed+=1
+            relative=(PurePosixPath(directory)/entry.name).as_posix()
+            if (not allowed(relative) or entry.is_symlink() or
+                scope.kind=='project' and entry.name in ('branches','runs') and not directory or
+                scope.kind=='run_output' and entry.name=='workspace' and not directory):
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                if len(stack)<2048: stack.append([relative,''])
+                else: scope.error='Directory depth capacity reached; inventory is incomplete'
+            elif entry.is_file(follow_symlinks=False):
+                f=observe(s,scope,relative,generation)
+                if f: byte_count+=min(f.size,CONTENT_LIMIT)
+        scope.queue=stack; scope.coverage='partial' if stack or scope.error else 'complete'; scope.observed_at=now()
+        if not stack and not scope.error:
             s.execute(update(ObservedFile).where(ObservedFile.scope_id==scope.id,
                 ObservedFile.scan_generation!=generation,ObservedFile.state!='deleted').values(
                 state='deleted',content=None,segments=[],stat={},parse_state='unavailable',generation=ObservedFile.generation+1,observed_at=now()))
