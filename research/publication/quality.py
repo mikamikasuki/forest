@@ -313,8 +313,12 @@ def assess_submission(root, profile=None, *, sources=(), runs=(), manifest=None)
         gap('insufficient_real_data', f"{len(undersized)} measured cells have fewer independent units than their dataset protocol/accepted-paper target ({unit_target}).", 'Experimenter')
 
     analysis_ids = array('analysis_run_ids')
-    if not analysis_ids or any(not isinstance(rid,str) or not completed(rid) or rid in measured_runs or run_by_id.get(rid,{}).get('kind') not in ('analysis','agent','command') for rid in analysis_ids):
-        gap('independent_analysis', 'Independently recompute key effects and intervals in separate completed analysis executions.', 'Analyst')
+    if any(
+        not isinstance(rid, str) or not completed(rid) or rid in measured_runs
+        or run_by_id[rid].get('kind') not in ('analysis', 'agent', 'command')
+        for rid in analysis_ids
+    ) or len(set(analysis_ids)) < 2:
+        gap('independent_analysis', 'List at least two distinct completed analysis runs.', 'Analyst')
     stats = array('statistics')
     if not stats or any(not isinstance(s, dict) or s.get('analysis_run_id') not in analysis_ids or
                         not all(_number(s.get(k)) for k in ('effect', 'ci_low', 'ci_high')) or s['ci_low'] > s['ci_high'] for s in stats):

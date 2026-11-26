@@ -50,6 +50,8 @@ across unrelated benchmarks. Measured cells identify a completed run and raw
 CSV/JSON artifact containing dataset, method, seed, study, independent unit ID
 and finite numeric observations. The audit reads these rows and execution
 receipts, checks units/data volume, and retains the remaining matrix explicitly.
+List at least two distinct completed analysis runs in `analysis_run_ids`,
+separate from the runs that produced the raw observations.
 Statistics bind effects and confidence limits to the actual independent
 analysis measurements using JSON pointers.
 
