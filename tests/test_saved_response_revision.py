@@ -36,7 +36,9 @@ def actual_evidence(tmp_path):
     return collect_evidence(
         [{'id': 'run-1', 'status': 'completed', 'directory': str(run)}],
         [{'id': 'methods', 'title': 'Numerical methods notes',
-          'data': {'abstract': 'A supplied description of the numerical method.'}}])
+          'data': {'abstract': 'A supplied description of the numerical method.',
+                   'passages': [{'text': 'The original protocol reports absolute error.'}]}},
+         {'id': 'uncited', 'title': 'Background notes'}])
 
 
 def valid_draft():
@@ -214,6 +216,35 @@ def test_revision_still_enforces_final_manuscript_style_contract(tmp_path):
         draft_from_saved_response(response_path, evidence, tmp_path / 'style-rejected',
                                   origin_run_id='origin-1', origin_response_path='saved.json',
                                   expected_type='full_paper', revision_path=revision_path)
+
+
+@pytest.mark.parametrize('citation,changed_field', [
+    ('source:methods', 'title'),
+    ('passage:methods:p0', 'passages'),
+])
+def test_saved_response_rejects_changed_cited_source(tmp_path, citation, changed_field):
+    evidence = actual_evidence(tmp_path)
+    original_evidence_path = tmp_path / 'original-evidence.json'
+    original_evidence_path.write_text(json.dumps(evidence))
+    draft = valid_draft()
+    draft['sections'][1]['paragraphs'] = [f'The original protocol reports absolute error [[{citation}]].']
+    response_path, _ = saved_response(tmp_path, draft)
+    options = {'origin_run_id': 'origin-1', 'origin_response_path': 'saved.json',
+               'expected_type': 'full_paper', 'original_evidence_path': original_evidence_path}
+
+    current = deepcopy(evidence)
+    current['sources'][1]['title'] = 'Revised uncited notes'
+    accepted, _, _ = draft_from_saved_response(response_path, current, tmp_path / 'accepted', **options)
+    assert accepted == draft
+
+    if changed_field == 'passages':
+        current['sources'][0]['passages'][0]['text'] = 'The revised protocol reports runtime.'
+    else:
+        current['sources'][0]['title'] = 'Revised protocol'
+    rejected = tmp_path / 'rejected'
+    with pytest.raises(ValueError, match='cited source evidence changed.*methods'):
+        draft_from_saved_response(response_path, current, rejected, **options)
+    assert not rejected.exists()
 
 
 def test_revision_rejects_missing_required_figure(tmp_path):
