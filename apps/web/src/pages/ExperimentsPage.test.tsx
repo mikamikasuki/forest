@@ -19,7 +19,7 @@ vi.mock("../shared/records", async (importOriginal) => ({
       {
         id: "command",
         title: "Command",
-        data: { command: "python experiment.py" },
+        data: { command: "python experiment.py", seeds: [11, 22, 33] },
       },
       {
         id: "entrypoint",
@@ -29,7 +29,7 @@ vi.mock("../shared/records", async (importOriginal) => ({
       {
         id: "example",
         title: "Example",
-        data: { example: "class_weight_calibration" },
+        data: { example: "class_weight_calibration", seeds: [1, 2, 3] },
       },
     ],
   }),
@@ -62,4 +62,6 @@ it("distinguishes saved reference source from the configured execution routes", 
   expect(html).toContain("python experiment.py");
   expect(html).toContain("experiment:run");
   expect(html).toContain("class_weight_calibration");
+  expect(html).toContain("Recorded seeds<strong>11, 22, 33</strong>");
+  expect(html).toContain("Seeds<strong>1, 2, 3</strong>");
 });
