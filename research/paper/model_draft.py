@@ -95,6 +95,15 @@ def draft_from_saved_response(response_path, evidence, output_dir, *, origin_run
     from research.paper.tables import materialize_statistical_tables
     draft = materialize_statistical_tables(draft, evidence)
     validation = validate_manuscript_contract(draft, evidence, expected_type, required_figure_ids=required_figure_ids)
+    if original_context_available:
+        original_sources = {source['id']: source for source in original.get('sources', [])}
+        current_sources = {source['id']: source for source in evidence['sources']}
+        # The validated source IDs include the parent sources of cited passages.
+        changed_sources = [key for key in validation['referenced_sources']
+                           if key in original_sources and original_sources[key] != current_sources[key]]
+        if changed_sources:
+            raise ValueError('Saved response cited source evidence changed (' + ', '.join(changed_sources)
+                             + '); request a fresh draft for the new evidence')
     provenance = {'mode': 'saved_response_revalidation', 'origin_run_id': origin_run_id,
                   'origin_response_path': origin_response_path, 'original_model': response['model'],
                   'original_usage': response['usage'], 'original_request_id': response.get('request_id'),
@@ -102,7 +111,7 @@ def draft_from_saved_response(response_path, evidence, output_dir, *, origin_run
                   'new_model_cost_usd': 0, 'requested_manuscript_type': expected_type,
                   'evidence_run_ids': [run['id'] for run in evidence['runs']],
                   'original_evidence_context_available': original_context_available,
-                  'evidence_validation': 'Original and current metric values/row identities agree' if original_context_available else 'Current evidence revalidated; original ordered run selection retained; original evidence context was not saved',
+                  'evidence_validation': 'Original and current metric values, row identities, and recorded cited sources agree' if original_context_available else 'Current evidence revalidated; original ordered run selection retained; original evidence context was not saved',
                   'validation': validation}
     if revision is not None:
         provenance['mode'] = 'saved_response_with_recorded_revision'
