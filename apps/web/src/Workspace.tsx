@@ -34,6 +34,7 @@ import {
   GitBranch,
   PanelRightClose,
   ChevronDown,
+  ChevronLeft,
   ChevronUp,
   Network,
   Focus,
@@ -95,6 +96,7 @@ import {
 } from "./ui";
 import { CodeEditor, LiveTerminal } from "./editors";
 import "@xyflow/react/dist/style.css";
+const RUN_HISTORY_PAGE_SIZE = 500;
 const nodeKinds = [
   ["goal", "研究目标", "Research goal"],
   ["literature", "文献检索", "Literature"],
@@ -329,10 +331,22 @@ function WorkspaceInner({
     edges: [],
     branches: [],
   });
-  const { data: runs, reload: reloadRuns } = useLoad<Run[]>(
-    `/projects/${id}/runs?limit=500`,
+  const runHistoryPath = `/projects/${id}/runs?limit=${RUN_HISTORY_PAGE_SIZE}`;
+  const { data: runs, reload: reloadRecentRuns } = useLoad<Run[]>(
+    runHistoryPath,
     [],
   );
+  const [runHistoryOffset, setRunHistoryOffset] = useState(0);
+  const olderRunPage = useLoad<Run[]>(
+    runHistoryOffset ? `${runHistoryPath}&offset=${runHistoryOffset}` : null,
+    [],
+  );
+  const reloadOlderRunPage = olderRunPage.reload;
+  const reloadRuns = useCallback(async () => {
+    await Promise.all([reloadRecentRuns(), reloadOlderRunPage()]);
+  }, [reloadRecentRuns, reloadOlderRunPage]);
+  const displayedRuns = runHistoryOffset ? olderRunPage.data : runs;
+  const loadingRunHistory = Boolean(runHistoryOffset && olderRunPage.loading);
   const [selection, setSelection] = useState<string[]>([]);
   const [inspector, setInspector] = useState(Boolean(selected));
   useEffect(() => {
@@ -1682,6 +1696,38 @@ function WorkspaceInner({
                   {t("终端", "Terminal")}
                 </button>
                 <span className="toolbar-spacer" />
+                {dock &&
+                  dockTab === "runs" &&
+                  (runHistoryOffset > 0 ||
+                    displayedRuns.length === RUN_HISTORY_PAGE_SIZE) && (
+                    <>
+                      <IconButton
+                        label={t("较新的运行", "Newer runs")}
+                        disabled={runHistoryOffset === 0}
+                        onClick={() =>
+                          setRunHistoryOffset(
+                            (offset) => offset - RUN_HISTORY_PAGE_SIZE,
+                          )
+                        }
+                      >
+                        <ChevronLeft size={15} />
+                      </IconButton>
+                      <IconButton
+                        label={t("较早的运行", "Older runs")}
+                        disabled={
+                          loadingRunHistory ||
+                          displayedRuns.length < RUN_HISTORY_PAGE_SIZE
+                        }
+                        onClick={() =>
+                          setRunHistoryOffset(
+                            (offset) => offset + RUN_HISTORY_PAGE_SIZE,
+                          )
+                        }
+                      >
+                        <ChevronRight size={15} />
+                      </IconButton>
+                    </>
+                  )}
                 <IconButton
                   label={t("切换运行面板", "Toggle run panel")}
                   onClick={() => setDock(!dock)}
@@ -1692,9 +1738,18 @@ function WorkspaceInner({
               {dock &&
                 (dockTab === "terminal" ? (
                   <LiveTerminal projectId={id!} />
+                ) : loadingRunHistory ? (
+                  <p className="dock-hint" role="status">
+                    {t("正在加载运行记录…", "Loading run history…")}
+                  </p>
+                ) : runHistoryOffset && olderRunPage.error ? (
+                  <ErrorBox
+                    error={olderRunPage.error}
+                    retry={reloadOlderRunPage}
+                  />
                 ) : (
                   <RunPanel
-                    runs={runs}
+                    runs={displayedRuns}
                     reload={async () => {
                       await Promise.all([reloadRuns(), selectedRun.reload()]);
                     }}
