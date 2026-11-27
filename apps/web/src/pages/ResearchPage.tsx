@@ -17,6 +17,7 @@ import {
 import {
   RecordEditor,
   RecordActions,
+  RecordPagination,
   useProjectRecords,
 } from "../shared/records";
 
@@ -27,6 +28,7 @@ export function ResearchPage({ resource }: { resource: string }) {
     error,
     reload,
     loading,
+    pagination,
   } = useProjectRecords(resource);
   const { t, action } = useUI();
   const [editing, setEditing] = useState<RecordItem | null | false>(false);
@@ -81,6 +83,7 @@ export function ResearchPage({ resource }: { resource: string }) {
         </div>
       </section>
       <ErrorBox error={error} retry={reload} />
+      <RecordPagination pagination={pagination} />
       {loading ? (
         <Loading />
       ) : records.length ? (

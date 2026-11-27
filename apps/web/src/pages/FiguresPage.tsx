@@ -23,10 +23,20 @@ import {
   PageHeading,
 } from "../ui";
 import { CodeEditor } from "../editors";
-import { RecordEditor, useProjectRecords } from "../shared/records";
+import {
+  RecordEditor,
+  RecordPagination,
+  useProjectRecords,
+} from "../shared/records";
 
 export function FiguresPage() {
-  const { data: figures, id, error, reload } = useProjectRecords("figures");
+  const {
+    data: figures,
+    id,
+    error,
+    reload,
+    pagination,
+  } = useProjectRecords("figures");
   const { data: runs, reload: reloadRuns } = useLoad<Run[]>(
     `/projects/${id}/runs`,
     [],
@@ -35,6 +45,15 @@ export function FiguresPage() {
   const [selected, setSelected] = useState("");
   const [creating, setCreating] = useState(false);
   const [figureDirty, setFigureDirty] = useState(false);
+  const confirmFigureChange = () => {
+    if (
+      figureDirty &&
+      !confirm(t("放弃未保存的图表修改？", "Discard unsaved figure changes?"))
+    )
+      return false;
+    setFigureDirty(false);
+    return true;
+  };
   const figure = figures.find((f) => f.id === selected) || figures[0];
   useEffect(() => {
     if (!selected && figures.length) setSelected(figures[0].id);
@@ -56,6 +75,10 @@ export function FiguresPage() {
         }
       />
       <ErrorBox error={error} retry={reload} />
+      <RecordPagination
+        pagination={pagination}
+        beforeChange={confirmFigureChange}
+      />
       {figures.length ? (
         <>
           <div className="figure-selector">
@@ -68,17 +91,7 @@ export function FiguresPage() {
                     if (!selected) setSelected(f.id);
                     return;
                   }
-                  if (
-                    figureDirty &&
-                    !confirm(
-                      t(
-                        "放弃未保存的图表修改？",
-                        "Discard unsaved figure changes?",
-                      ),
-                    )
-                  )
-                    return;
-                  setFigureDirty(false);
+                  if (!confirmFigureChange()) return;
                   setSelected(f.id);
                 }}
               >

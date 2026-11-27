@@ -5,15 +5,70 @@ import { api, parseJson } from "../api";
 import type { Json, RecordItem } from "../api";
 import { useUI, useLoad, Button, IconButton, Modal, Field } from "../ui";
 
+const RECORD_PAGE_SIZE = 100;
+
 export function useProjectRecords(resource: string) {
   const { id } = useParams();
-  const result = useLoad<RecordItem[]>(`/${resource}?project_id=${id}`, []);
+  const path = `/${resource}?project_id=${id}&limit=${RECORD_PAGE_SIZE}`;
+  const [page, setPage] = useState({ path, offset: 0 });
+  const offset = page.path === path ? page.offset : 0;
+  const result = useLoad<RecordItem[]>(
+    offset ? `${path}&offset=${offset}` : path,
+    [],
+  );
   useEffect(() => {
     const refresh = () => void result.reload();
     window.addEventListener("forest-refresh", refresh);
     return () => window.removeEventListener("forest-refresh", refresh);
   }, [result.reload]);
-  return { ...result, id };
+  return {
+    ...result,
+    id,
+    pagination: {
+      offset,
+      loading: result.loading,
+      hasOlder: result.data.length === RECORD_PAGE_SIZE,
+      goTo: (next: number) => setPage({ path, offset: next }),
+    },
+  };
+}
+
+export function RecordPagination({
+  pagination,
+  beforeChange,
+}: {
+  pagination: ReturnType<typeof useProjectRecords>["pagination"];
+  beforeChange?: () => boolean;
+}) {
+  const { t } = useUI();
+  if (!pagination || (!pagination.offset && !pagination.hasOlder)) return null;
+  const { offset, loading, hasOlder, goTo } = pagination;
+  const change = (next: number) => {
+    if (beforeChange && !beforeChange()) return;
+    goTo(next);
+  };
+  return (
+    <nav
+      className="raw-pagination"
+      aria-label={t("保存记录分页", "Saved record pages")}
+    >
+      <Button
+        disabled={offset === 0 || loading}
+        onClick={() => change(offset - RECORD_PAGE_SIZE)}
+      >
+        {t("较新的记录", "Newer records")}
+      </Button>
+      <span aria-live="polite">
+        {t("页", "Page")} {offset / RECORD_PAGE_SIZE + 1}
+      </span>
+      <Button
+        disabled={!hasOlder || loading}
+        onClick={() => change(offset + RECORD_PAGE_SIZE)}
+      >
+        {t("较早的记录", "Older records")}
+      </Button>
+    </nav>
+  );
 }
 
 export function RecordEditor({
