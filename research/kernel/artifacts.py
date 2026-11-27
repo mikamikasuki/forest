@@ -148,6 +148,8 @@ def _files(root: Path):
 
 
 def _same(left, right):
+    if isinstance(left, dict) or isinstance(right, dict):
+        return left == right
     if left is None or right is None:
         return left is right
     if left.stat().st_size != right.stat().st_size:
@@ -164,6 +166,8 @@ def _same(left, right):
 def _text(path):
     if path is None:
         return ""
+    if isinstance(path, dict):
+        return None
     if path.stat().st_size > 128_000:
         return None
     try:
@@ -327,10 +331,24 @@ class BranchWorkspace:
                 return root
         return None
 
+    def _merge_entries(self, branch):
+        entries = {}
+        for reference in branch.get("input_mapping", []):
+            if not isinstance(reference, dict) or not reference.get("path"):
+                continue
+            destination = reference.get("destination") or reference["path"]
+            if not isinstance(destination, str):
+                continue
+            entries[Path(destination).as_posix()] = {
+                **reference, "branch_id": reference.get("branch_id") or branch["id"],
+            }
+        # A local file at the destination shadows the inherited reference.
+        entries.update(_files(self.resolver.branch_path(branch["id"])))
+        return entries
+
     def compare(self, left, right):
         left, right = self._branch(left), self._branch(right)
-        lf = _files(self.resolver.branch_path(left["id"]))
-        rf = _files(self.resolver.branch_path(right["id"]))
+        lf, rf = self._merge_entries(left), self._merge_entries(right)
         base = self._base(left, right)
         bf = _files(base) if base else {}
         rows = []
@@ -347,6 +365,10 @@ class BranchWorkspace:
             lt, rt = _text(l), _text(r)
             row = {"path": rel, "status": status, "choice": choice, "left_exists": l is not None,
                    "right_exists": r is not None, "base_exists": b is not None}
+            if isinstance(l, dict):
+                row["left_reference"] = l
+            if isinstance(r, dict):
+                row["right_reference"] = r
             if lt is not None and rt is not None:
                 row["diff"] = "".join(difflib.unified_diff(lt.splitlines(True), rt.splitlines(True), fromfile="left/" + rel, tofile="right/" + rel))[:16000]
             rows.append(row)
@@ -361,7 +383,7 @@ class BranchWorkspace:
         resolution = resolution or {}
         comparison = self.compare(left, right)
         choices = resolution.get("files", resolution)
-        conflicts, selected = [], {}
+        conflicts, selected, references = [], {}, []
         roots = {"left": self.resolver.branch_path(left["id"]), "right": self.resolver.branch_path(right["id"])}
         if comparison["base_workspace"]:
             roots["base"] = safe_path(self.project_dir, comparison["base_workspace"])
@@ -375,8 +397,11 @@ class BranchWorkspace:
             elif choice == "delete":
                 selected[rel] = ("delete", None)
             elif isinstance(choice, str) and choice in roots:
-                path = safe_path(roots[choice], rel)
-                selected[rel] = ("copy", path) if path.is_file() else ("delete", None)
+                if reference := item.get(f"{choice}_reference"):
+                    references.append(reference)
+                else:
+                    path = safe_path(roots[choice], rel)
+                    selected[rel] = ("copy", path) if path.is_file() else ("delete", None)
             else:
                 raise GraphError("invalid_resolution", f"Choose left, right, base, delete, or content for {rel}.")
         lcfg, rcfg = left.get("config", {}), right.get("config", {})
@@ -421,7 +446,7 @@ class BranchWorkspace:
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
         return {**comparison, "branch_id": branch_id, "workspace": str(dest.relative_to(self.project_dir)),
-                "config": config or {}, "conflicts": conflicts, "requires_revalidation": True,
+                "config": config or {}, "conflicts": conflicts, "input_mapping": references, "requires_revalidation": True,
                 "reevaluate_inputs": [n["id"] for n in self.graph["nodes"] if n["branch_id"] in (left["id"], right["id"])],
                 **({'_materialization': {rel: {'kind': kind, **({'source': str(value.relative_to(self.project_dir))}
                     if kind == 'copy' else {'content': value} if kind == 'content' else {})}

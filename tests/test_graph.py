@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from research.kernel import ArtifactResolver, BranchWorkspace, ContextBuilder, GraphCommandService, GraphError, ImpactAnalyzer, topological_order
+from research.kernel.artifacts import resolve_branch_references
 
 
 def node(identifier, typ="experiment", branch="main", **extra):
@@ -287,6 +288,59 @@ def test_graph_merge_applies_actual_files(tmp_path):
     assert (tmp_path / merged["workspace"] / "model.py").read_text() == "new method"
     assert merged["requires_revalidation"]
     assert all(n.get("requires_revalidation") for n in result["graph"]["nodes"] if n["branch_id"] == merged["id"])
+
+
+def test_merge_preserves_inherited_data_references(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "train.csv").write_text("shared observations")
+    g = apply(graph(), tmp_path, "fork_branch", ["a"], name="Left")["graph"]
+    left = g["branches"][-1]
+    g = apply(g, tmp_path, "fork_branch", ["a"], name="Right")["graph"]
+    right = g["branches"][-1]
+
+    result = apply(g, tmp_path, "merge_branches", left=left["id"], right=right["id"])["graph"]
+    merged = result["branches"][-1]
+
+    assert not (tmp_path / merged["workspace"] / "data" / "train.csv").exists()
+    assert merged["input_mapping"] == left["input_mapping"] == right["input_mapping"]
+    bindings, missing = resolve_branch_references(tmp_path, result, merged["id"])
+    assert missing == []
+    assert len(bindings) == 1
+    assert bindings[0]["destination"] == "data/train.csv"
+    assert (tmp_path / bindings[0]["source_path"]).read_text() == "shared observations"
+
+    (data / "train.csv").unlink()
+    bindings, missing = resolve_branch_references(tmp_path, result, merged["id"])
+    assert bindings == []
+    assert missing == merged["input_mapping"]
+
+
+def test_merge_requires_a_choice_for_different_references_at_one_destination(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "train.csv").write_text("left observations")
+    (data / "alternative.csv").write_text("right observations")
+    g = apply(graph(), tmp_path, "fork_branch", ["a"], name="Left")["graph"]
+    g = apply(g, tmp_path, "fork_branch", ["a"], name="Right")["graph"]
+    left, right = g["branches"][-2:]
+    left["input_mapping"] = [ref for ref in left["input_mapping"] if ref["destination"] == "data/train.csv"]
+    right["input_mapping"] = [{**ref, "destination": "data/train.csv"}
+                              for ref in right["input_mapping"] if ref["destination"] == "data/alternative.csv"]
+
+    comparison = BranchWorkspace(tmp_path, g).compare(left["id"], right["id"])
+    assert [(row["path"], row["status"]) for row in comparison["files"]] == [("data/train.csv", "conflict")]
+    with pytest.raises(GraphError) as conflict:
+        apply(g, tmp_path, "merge_branches", left=left["id"], right=right["id"])
+    assert conflict.value.code == "merge_conflict"
+
+    result = apply(g, tmp_path, "merge_branches", left=left["id"], right=right["id"],
+                   resolution={"files": {"data/train.csv": "right"}})["graph"]
+    merged = result["branches"][-1]
+    bindings, missing = resolve_branch_references(tmp_path, result, merged["id"])
+    assert missing == []
+    assert len(bindings) == 1
+    assert (tmp_path / bindings[0]["source_path"]).read_text() == "right observations"
 
 
 def test_insert_before_and_after_change_execution_order(tmp_path):

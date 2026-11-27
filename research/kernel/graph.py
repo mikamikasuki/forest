@@ -602,6 +602,8 @@ class GraphCommandService:
             if not conflicts:
                 b = {"id": bid, "name": params.get("name", f"{left['name']} + {right['name']}"), "status": "active", "workspace": merge["workspace"],
                      "is_main": False, "config": merge["config"], "merged_from": [left["id"], right["id"]], "requires_revalidation": True}
+                if merge["input_mapping"]:
+                    b["input_mapping"] = merge["input_mapping"]
                 graph["branches"].append(b)
                 ids = {n["id"] for n in graph["nodes"] if n["branch_id"] in {left["id"], right["id"]}}
                 mapping = clone(ids, bid, "reference")
