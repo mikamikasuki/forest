@@ -73,6 +73,9 @@ def distinct_idea_directions(ideas):
 
     def same_facet(left, right):
         a, b = tokens(left), tokens(right)
+        # A strict superset can add a meaningful design qualifier.
+        if a < b or b < a:
+            return False
         return bool(a and b and len(a & b) / min(len(a), len(b)) >= .8)
 
     unique = []
