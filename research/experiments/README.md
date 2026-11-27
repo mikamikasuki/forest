@@ -20,7 +20,9 @@ one more pair of dataset fits; actual costs are always measured in `training.jso
 
 Stages are independently callable: `prepare`, `train`, `evaluate`, and `collect`.
 `--stage evaluate` rebuilds the prediction CSV and statistics from saved `.npz`
-probabilities without training. `research.analysis.statistics.analyze` recomputes
+probabilities without training. After a retraining attempt, evaluation requires
+that the attempt completed with matching fitting options.
+`research.analysis.statistics.analyze` recomputes
 statistics directly from a prediction CSV; its `confidence`, `ece_bins`,
 `bootstrap_samples`, candidate, and comparison baselines are editable.
 

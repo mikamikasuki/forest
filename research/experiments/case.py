@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import time
+from uuid import uuid4
 import zipfile
 
 import httpx
@@ -32,10 +33,19 @@ from threadpoolctl import threadpool_limits
 
 DEFAULT_CONFIG = {"protocol_version": 2, "fixed_test_seed": 20260927, "tuning_fraction": 0.2, "datasets": ["adult", "bank"], "seeds": [7, 19, 43], "train_fraction": 0.6, "calibration_fraction": 0.2, "c_grid": [0.1, 1.0, 10.0], "max_iter": 1200, "hgb_iterations": 150, "bootstrap_samples": 1000, "bootstrap_seed": 20260927, "n_threads": 2, "primary_baseline": "balanced_raw", "candidate": "prior_corrected", "meaningful_brier_gain": 0.002, "calibration_budgets": [64, 256], "correction_strengths": [0.5, 1.5]}
 SOURCES = {"adult": {"url": "https://archive.ics.uci.edu/static/public/2/adult.zip", "doi": "10.24432/C5XW20", "license": "CC BY 4.0", "target": "income > 50K", "excluded_features": []}, "bank": {"url": "https://archive.ics.uci.edu/static/public/222/bank+marketing.zip", "doi": "10.24432/C5K306", "license": "CC BY 4.0", "target": "term deposit subscription", "excluded_features": ["duration (known only after the call)"]}}
+SPLIT_CONFIG_KEYS = ("datasets", "seeds", "train_fraction", "calibration_fraction",
+                     "fixed_test_seed", "tuning_fraction", "protocol_version")
+FIT_CONFIG_KEYS = (*SPLIT_CONFIG_KEYS, "c_grid", "max_iter", "hgb_iterations",
+                   "calibration_budgets", "correction_strengths", "n_threads")
 
 
 def _write(path, value):
     Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False))
+
+
+def _fit_configuration(config):
+    return {key: list(config[key]) if isinstance(config[key], tuple) else config[key]
+            for key in FIT_CONFIG_KEYS}
 
 
 def configuration(config=None):
@@ -124,9 +134,12 @@ def train(output_dir, config=None):
     config = configuration({**stored_config, **(config or {})})
     # Train must use precisely the prepared splits/configuration.
     prepared = json.loads((output / "config.json").read_text())
-    for key in ("datasets", "seeds", "train_fraction", "calibration_fraction", "fixed_test_seed", "tuning_fraction", "protocol_version"):
+    for key in SPLIT_CONFIG_KEYS:
         if config[key] != prepared[key]:
             raise ValueError(f"{key} changed: run prepare before training")
+    attempt_path = output / "training_attempt.json"
+    attempt = {"id": uuid4().hex, "status": "pending", "fit_config": _fit_configuration(config)}
+    _write(attempt_path, attempt)
     _write(output / "config.json", config)
     records = []
     with threadpool_limits(limits=int(config["n_threads"])):
@@ -199,6 +212,7 @@ def train(output_dir, config=None):
                 records.append(run)
                 _write(output / "training.json", records)
                 print(json.dumps({"event": "training_completed", "dataset": name, "seed": seed, "seconds": round(run["elapsed_seconds"], 3), "methods": list(probabilities)}), flush=True)
+    _write(attempt_path, {**attempt, "status": "completed"})
     return records
 
 
@@ -208,7 +222,14 @@ def evaluate(output_dir, config=None):
     if stored_config.get("protocol_version", 1) != 2:
         raise ValueError("Re-evaluation requires a protocol_version 2 run. Analyze legacy predictions.csv directly to preserve its original protocol.")
     config = configuration({**stored_config, **(config or {})})
-    _write(output / "analysis_config.json", config)
+    attempt_path = output / "training_attempt.json"
+    attempt_snapshot = attempt_path.read_text() if attempt_path.is_file() else None
+    if attempt_snapshot is not None:
+        attempt = json.loads(attempt_snapshot)
+        if attempt["status"] != "completed":
+            raise ValueError("The latest training attempt did not complete. Run train before evaluation.")
+        if attempt["fit_config"] != _fit_configuration(config):
+            raise ValueError("The training configuration changed. Run train with the desired fitting options.")
     frames = []
     for name in config["datasets"]:
         for seed in config["seeds"]:
@@ -218,6 +239,9 @@ def evaluate(output_dir, config=None):
                     continue
                 frames.append(pd.DataFrame({"dataset": name, "seed": seed, "sample_id": raw["sample_id"], "method": method, "y_true": raw["y_true"], "probability": raw[method]}))
     predictions = pd.concat(frames, ignore_index=True)
+    if (attempt_path.read_text() if attempt_path.is_file() else None) != attempt_snapshot:
+        raise ValueError("The training attempt changed during evaluation. Retry after training completes.")
+    _write(output / "analysis_config.json", config)
     predictions.to_csv(output / "predictions.csv", index=False, float_format="%.17g")
     from research.analysis.statistics import analyze
     return analyze(output / "predictions.csv", output, config)
