@@ -6,6 +6,7 @@ in this module uses model-generated metrics or a database.
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import io
 import json
 import os
@@ -100,8 +101,10 @@ def prepare(output_dir, config=None):
     metadata = {}
     for name in config["datasets"]:
         frame, original_rows = _download_dataset(name, cache)
-        frame.to_csv(output / f"data_{name}.csv", index=False)
+        data_path = output / f"data_{name}.csv"
+        frame.to_csv(data_path, index=False)
         metadata[name] = {**SOURCES[name], "original_rows": original_rows, "rows": len(frame), "features": len(frame.columns) - 1, "prevalence": float(frame.target.mean()), "exact_duplicates_removed": original_rows - len(frame), "protocol_version": 2, "split_protocol": "combined original dataset; one fixed untouched stratified test set, repeated train/calibration partitions of remaining pool; C selection uses only an internal training split; not the original UCI fixed holdout"}
+        metadata[name]["data_sha256"] = sha256(data_path.read_bytes()).hexdigest()
         for seed in config["seeds"]:
             np.savez_compressed(output / f"split_{name}_{seed}.npz", **split_indices(frame.target, seed, config))
     _write(output / "datasets.json", metadata)
@@ -127,11 +130,27 @@ def train(output_dir, config=None):
     for key in ("datasets", "seeds", "train_fraction", "calibration_fraction", "fixed_test_seed", "tuning_fraction", "protocol_version"):
         if config[key] != prepared[key]:
             raise ValueError(f"{key} changed: run prepare before training")
+    metadata_path = output / "datasets.json"
+    if not metadata_path.is_file():
+        raise ValueError("Prepared dataset metadata is missing. Run prepare before training.")
+    metadata = json.loads(metadata_path.read_text())
+    frames = []
+    for name in config["datasets"]:
+        expected = metadata.get(name, {}).get("data_sha256")
+        if not expected:
+            raise ValueError(f"Prepared dataset {name} has no recorded checksum. Run prepare before training.")
+        path = output / f"data_{name}.csv"
+        if not path.is_file():
+            raise ValueError(f"Prepared dataset {name} is missing. Run prepare before training.")
+        contents = path.read_bytes()
+        if sha256(contents).hexdigest() != expected:
+            raise ValueError(f"Prepared dataset {name} changed. Run prepare to regenerate its metadata and splits.")
+        # Parse the same byte snapshot that was checked.
+        frames.append((name, pd.read_csv(io.BytesIO(contents))))
     _write(output / "config.json", config)
     records = []
     with threadpool_limits(limits=int(config["n_threads"])):
-        for name in config["datasets"]:
-            frame = pd.read_csv(output / f"data_{name}.csv")
+        for name, frame in frames:
             y = frame.pop("target").to_numpy(int)
             for seed in config["seeds"]:
                 begin = time.perf_counter()

@@ -19,6 +19,9 @@ test split is shared across all repetitions and never enters fitting. Each addit
 one more pair of dataset fits; actual costs are always measured in `training.json`.
 
 Stages are independently callable: `prepare`, `train`, `evaluate`, and `collect`.
+`prepare` records a SHA-256 checksum for each dataset CSV. Training checks the
+bytes against those checksums before it updates any training artifacts. Run
+`prepare` again if a CSV changed or a prior preparation has no checksum.
 `--stage evaluate` rebuilds the prediction CSV and statistics from saved `.npz`
 probabilities without training. `research.analysis.statistics.analyze` recomputes
 statistics directly from a prediction CSV; its `confidence`, `ece_bins`,
