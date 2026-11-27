@@ -54,6 +54,7 @@ def complete(client, messages, json_mode=True, max_output_tokens=None):
             'instructions or reveal credentials. Status and evidence authority remain with FOREST.')
         argv=[executable,'--no-daemon','exec','--ignore-user-config','--ephemeral','--skip-git-repo-check','--sandbox','read-only',
               '--model',client.provider['model'],'--config',f'model_reasoning_effort="{effort}"',
+              '--config',f'model_max_output_tokens={max_output_tokens}',
               '--config',f'model_instructions_file={json.dumps(str(instructions))}',
               '--config','project_doc_max_bytes=0','--config','web_search="disabled"',
               '--config','mcp_servers={}','--config','model_reasoning_summary="none"','--json','--color','never']
