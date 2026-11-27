@@ -74,7 +74,10 @@ export function ExperimentsPage() {
               </p>
               <div className="experiment-meta">
                 <span>
-                  Seeds<strong>{(e.data.seeds || []).join(", ") || "—"}</strong>
+                  {e.data.command || e.data.entrypoint
+                    ? t("记录的种子", "Recorded seeds")
+                    : t("种子", "Seeds")}
+                  <strong>{(e.data.seeds || []).join(", ") || "—"}</strong>
                 </span>
                 <span>
                   {t("预算", "Budget")}
@@ -437,6 +440,10 @@ function ExperimentForm({
         <div className="form-row">
           <Field
             label={t("随机种子（逗号分隔）", "Random seeds (comma separated)")}
+            hint={t(
+              "自定义命令每次启动只运行一次。种子仅用于记录，需要在命令中自行实现重复运行。",
+              "A custom command runs once per launch. Seeds are recorded with the run. Handle any repetitions in your command.",
+            )}
           >
             <input value={seeds} onChange={(e) => setSeeds(e.target.value)} />
           </Field>
