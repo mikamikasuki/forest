@@ -27,6 +27,7 @@ import { PDFViewer } from "../editors";
 import {
   RecordEditor,
   RecordActions,
+  RecordPagination,
   useProjectRecords,
 } from "../shared/records";
 
@@ -37,6 +38,7 @@ export function LibraryPage() {
     reload,
     error,
     loading,
+    pagination,
   } = useProjectRecords("library");
   const { t, action } = useUI();
   const [search, setSearch] = useState("");
@@ -201,6 +203,7 @@ export function LibraryPage() {
         </details>
       </section>
       <ErrorBox error={error} retry={reload} />
+      <RecordPagination pagination={pagination} />
       {searched && (
         <section className="surface">
           <div className="section-toolbar">

@@ -18,11 +18,18 @@ import { demoLink } from "../DemoGuide";
 import {
   RecordEditor,
   RecordActions,
+  RecordPagination,
   useProjectRecords,
 } from "../shared/records";
 
 export function TheoryPage() {
-  const { data: records, id, error, reload } = useProjectRecords("theories");
+  const {
+    data: records,
+    id,
+    error,
+    reload,
+    pagination,
+  } = useProjectRecords("theories");
   const { t, action } = useUI();
   const [expression, setExpression] = useState("");
   const [variable, setVariable] = useState("x");
@@ -122,6 +129,7 @@ export function TheoryPage() {
         </section>
       </div>
       <ErrorBox error={error} retry={reload} />
+      <RecordPagination pagination={pagination} />
       {records.length ? (
         <div className="record-list">
           {records.map((r) => (

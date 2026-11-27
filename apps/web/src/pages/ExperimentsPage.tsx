@@ -17,7 +17,11 @@ import {
 } from "../ui";
 import { CodeEditor } from "../editors";
 import { RunPanel } from "../runs/RunPanel";
-import { RecordActions, useProjectRecords } from "../shared/records";
+import {
+  RecordActions,
+  RecordPagination,
+  useProjectRecords,
+} from "../shared/records";
 import { compactMetrics } from "../shared/metrics";
 
 export function ExperimentsPage() {
@@ -26,6 +30,7 @@ export function ExperimentsPage() {
     id,
     error,
     reload,
+    pagination,
   } = useProjectRecords("experiments");
   const { data: runs, reload: reloadRuns } = useLoad<Run[]>(
     `/projects/${id}/runs`,
@@ -57,6 +62,7 @@ export function ExperimentsPage() {
         }
       />
       <ErrorBox error={error} retry={reload} />
+      <RecordPagination pagination={pagination} />
       {experiments.length ? (
         <div className="experiment-grid">
           {experiments.map((e) => (
