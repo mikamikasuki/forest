@@ -131,10 +131,10 @@ excluded={'node_modules','__pycache__','agent_session.json','secrets.json','cred
 # Sorted depth-first order and a cursor in that order; no full-tree materialization.
 found=not CURSOR
 for directory,dirs,files in os.walk(root,followlinks=False):
- dirs[:]=sorted(v for v in dirs if not v.startswith('.') and v not in excluded and not (pathlib.Path(directory)/v).is_symlink())
+ dirs[:]=sorted(v for v in dirs if not v.startswith('.') and v.lower() not in excluded and not (pathlib.Path(directory)/v).is_symlink())
  for name in sorted(files):
   p=pathlib.Path(directory)/name; relative=p.relative_to(root).as_posix()
-  if name.startswith('.') or name in excluded or p.is_symlink() or p.suffix in ('.pem','.key','.p12','.pfx'): continue
+  if name.startswith('.') or name.lower() in excluded or p.is_symlink() or p.suffix.lower() in ('.pem','.key','.p12','.pfx'): continue
   if not found:
    if relative==CURSOR: found=True
    continue

@@ -42,8 +42,8 @@ def observation_write_lock(s,project_id):
 def allowed(path):
     parts=PurePosixPath(path).parts
     return bool(parts) and not PurePosixPath(path).is_absolute() and all(
-        v not in ('.','..') and not v.startswith('.') and v not in EXCLUDED and
-        not v.endswith(('.pem','.key','.p12','.pfx')) for v in parts)
+        v not in ('.','..') and not v.startswith('.') and v.lower() not in EXCLUDED and
+        not v.lower().endswith(('.pem','.key','.p12','.pfx')) for v in parts)
 
 def regular_read(root: Path, relative: str, limit=CONTENT_LIMIT, *, project_root=None):
     """Open every relative component without following symlinks, then compare reads."""
